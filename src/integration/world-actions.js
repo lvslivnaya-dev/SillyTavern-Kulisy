@@ -1,0 +1,192 @@
+/**
+ * Hand edits of the scene (clock, place, outfits, conditions, items, chat place
+ * cards) and the four answers to a continuity slip. Every edit is an ordinary
+ * journaled manual operation, so it shows in the history and survives swipes of
+ * other replies; whatever the user writes by hand can be locked against the chronicler.
+ */
+import { createOperation, dropOperation, parseTime, uniqueId } from '../core/index.js';
+
+function meta(reason) {
+  return { transactionId: uniqueId('manual'), reason, timestamp: new Date().toISOString() };
+}
+
+/** Reminders for the narrator's next reply only ("Майки всё ещё в форме"). */
+export function createReminders() {
+  let items = [];
+  return {
+    add(text) { const value = String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, 300); if (value) items.push(value); },
+    list: () => [...items],
+    /** Called when the reply they were meant for has arrived. */
+    clear() { items = []; },
+  };
+}
+
+/**
+ * deps: { getState(), commitOperations(ops), chat(), saveChat(), markerKey, input(title, text, value) → string|null,
+ *         swipe(messageIndex), editMessage(messageIndex), reminders, openStudio(tab, options), refresh() }
+ */
+export function createWorldCallbacks(deps) {
+  const { getState, commitOperations } = deps;
+  const run = (type, payload, reason) => commitOperations([createOperation(type, payload, meta(reason))]);
+  const nameOf = id => getState().entities?.[id]?.name ?? id;
+  const requireCharacter = id => { if (!getState().entities?.[id]) throw new Error('Персонаж не найден.'); };
+
+  function slipOf(messageIndex, slipIndex) {
+    const slip = deps.chat()?.[messageIndex]?.extra?.[deps.markerKey]?.slips?.[slipIndex];
+    if (!slip) throw new Error('Отметка уже снята.');
+    return slip;
+  }
+
+  async function dropSlip(messageIndex, slipIndex) {
+    const marker = deps.chat()?.[messageIndex]?.extra?.[deps.markerKey];
+    if (!marker?.slips?.[slipIndex]) return;
+    marker.slips.splice(slipIndex, 1);
+    if (!marker.slips.length) delete marker.slips;
+    await deps.saveChat();
+    deps.refresh();
+  }
+
+  const callbacks = {
+    // ---- Clock and place ------------------------------------------------
+    onSetClock: ({ day, time, label, flashback }) => {
+      const payload = {};
+      if (day != null && day !== '') payload.day = Number(day);
+      if (time != null) {
+        if (String(time).trim() && parseTime(time) == null) throw new Error('Время пишется как ЧЧ:ММ, например 07:30 или 23:05.');
+        payload.time = String(time).trim();
+      }
+      if (label != null) payload.label = label;
+      if (flashback != null) payload.flashback = Boolean(flashback);
+      if (!Object.keys(payload).length) return null;
+      return run('clock.set', payload, 'Ручная правка времени');
+    },
+    /** A place card of this chat, or free text (a matching card is picked up by name). */
+    onSetSceneLocation: ({ locationId, location }) => {
+      const scene = getState().knowledge?.scene ?? { presentIds: [] };
+      const payload = { presentIds: scene.presentIds ?? [] };
+      if (locationId) payload.locationId = locationId;
+      else payload.location = String(location ?? '').trim();
+      return run('scene.set', payload, 'Ручная правка места');
+    },
+
+    // ---- Outfits and conditions -----------------------------------------
+    onSetOutfit: ({ entityId, outfit, locked }) => {
+      requireCharacter(entityId);
+      return run('wardrobe.set', { entityId, ...(outfit != null ? { outfit } : {}), ...(locked != null ? { locked: Boolean(locked) } : {}) },
+        outfit != null ? `Одежда ${nameOf(entityId)}: ${String(outfit).slice(0, 80)}` : `${locked ? 'Закреплено' : 'Откреплено'}: одежда ${nameOf(entityId)}`);
+    },
+    onAddCondition: ({ entityId, text, days }) => {
+      requireCharacter(entityId);
+      if (!String(text ?? '').trim()) throw new Error('Опишите состояние.');
+      return run('condition.add', { entityId, item: { id: uniqueId('condition'), text, ...(Number(days) > 0 ? { days: Number(days) } : {}) } }, `${nameOf(entityId)}: ${text}`);
+    },
+    onUpdateCondition: ({ entityId, conditionId, changes }) => run('condition.update', { entityId, conditionId, changes }, `Правка состояния ${nameOf(entityId)}`),
+    onRemoveCondition: ({ entityId, conditionId }) => run('condition.remove', { entityId, conditionId }, `Состояние снято: ${nameOf(entityId)}`),
+
+    // ---- Undo one change of the last reply ----------------------------------
+    /** Only a change the chronicler made for a message; hand edits are changed by hand. */
+    onUndoOperation: ({ operationId }) => {
+      const operation = getState().operations.find(candidate => candidate.id === operationId);
+      if (!operation) throw new Error('Такого изменения уже нет.');
+      if (!operation.messageId) throw new Error('Это ручная правка: её меняют там же, где сделали.');
+      return deps.replaceState(dropOperation(getState(), operationId));
+    },
+
+    // ---- Lasting looks -------------------------------------------------------
+    onAddFeature: ({ entityId, text, kind = 'other' }) => {
+      requireCharacter(entityId);
+      if (!String(text ?? '').trim()) throw new Error('Опишите, что изменилось.');
+      return run('feature.add', { entityId, item: { id: uniqueId('feature'), text, kind } }, `${nameOf(entityId)}: ${text}`);
+    },
+    onUpdateFeature: ({ entityId, featureId, changes }) => run('feature.update', { entityId, featureId, changes }, 'Ручная правка внешности'),
+    onRemoveFeature: ({ entityId, featureId }) => run('feature.remove', { entityId, featureId }, 'Черта внешности убрана'),
+
+    // ---- Several items at once: switch off / on / delete ---------------------
+    /**
+     * action: 'on' (in use), 'shade', 'off', 'remove'. «In use» starts the shade count
+     * again from now, so a thing brought back by hand does not slip straight back.
+     */
+    onItemsBulk: ({ itemIds = [], action }) => {
+      const ids = new Set(itemIds);
+      const items = (getState().world?.items ?? []).filter(item => ids.has(item.id));
+      if (!items.length) throw new Error('Ничего не выбрано.');
+      const label = { remove: 'Удалено', off: 'Отключено', shade: 'В тень', on: 'В ход' }[action];
+      if (!label) throw new Error('Неизвестное действие.');
+      const now = Math.max(0, (deps.chat?.()?.length ?? 1) - 1);
+      const changes = { on: { off: false, shade: false, activeSince: now }, shade: { off: false, shade: true }, off: { off: true, shade: false } }[action];
+      const metadata = meta(`${label} вещей: ${items.length}`);
+      return commitOperations(items.map(item => (action === 'remove'
+        ? createOperation('item.remove', { itemId: item.id }, metadata)
+        : createOperation('item.update', { itemId: item.id, changes }, metadata))));
+    },
+
+    // ---- Items ------------------------------------------------------------
+    onAddItem: ({ name, ownerId = '', place = '', importance = 'normal', secret = false }) => {
+      if (!String(name ?? '').trim()) throw new Error('Назовите вещь.');
+      return run('item.add', { item: { id: uniqueId('item'), name, ...(ownerId ? { ownerId } : {}), ...(place ? { place } : {}), importance, ...(secret ? { secret: true } : {}) } }, `Новая вещь: ${name}`);
+    },
+    onUpdateItem: ({ itemId, changes }) => run('item.update', { itemId, changes }, 'Ручная правка вещи'),
+    onRemoveItem: ({ itemId }) => run('item.remove', { itemId }, 'Вещь удалена'),
+
+    // ---- Place cards of this chat -------------------------------------------
+    onAddChatLocation: ({ name, parentId = '', traits = [] }) => {
+      if (!String(name ?? '').trim()) throw new Error('Назовите место.');
+      return run('location.add', { item: { id: uniqueId('location'), name, traits, ...(parentId ? { parentId } : {}) } }, `Новое место: ${name}`);
+    },
+    onUpdateChatLocation: ({ locationId, changes }) => run('location.update', { locationId, changes }, 'Ручная правка места'),
+    onRemoveChatLocation: ({ locationId }) => run('location.remove', { locationId }, 'Место удалено из чата'),
+
+    // ---- Slips: the four answers -------------------------------------------
+    onSlipSwipe: async ({ messageIndex, slipIndex }) => {
+      slipOf(messageIndex, slipIndex);
+      await deps.swipe(messageIndex);
+    },
+    onSlipEdit: ({ messageIndex }) => deps.editMessage(messageIndex),
+    /** «Так и есть»: the text is right, the record is not — rewrite the record to match. */
+    onSlipAccept: async ({ messageIndex, slipIndex }) => {
+      const slip = slipOf(messageIndex, slipIndex);
+      const state = getState();
+      if (slip.kind === 'item') {
+        await dropSlip(messageIndex, slipIndex);
+        deps.openStudio('items', { entityId: slip.entityId });
+        return 'items';
+      }
+      if (slip.kind === 'outfit') {
+        const current = state.world?.wardrobe?.[slip.entityId]?.outfit ?? '';
+        const value = await deps.input(`Что на ${nameOf(slip.entityId)} на самом деле`, `В ответе: «${slip.quote}»`, current);
+        if (value == null) return null;
+        await callbacks.onSetOutfit({ entityId: slip.entityId, outfit: value });
+      } else if (slip.kind === 'time') {
+        const value = await deps.input('Сколько сейчас времени', `В ответе: «${slip.quote}». Формат ЧЧ:ММ.`, state.world?.clock?.time ?? '');
+        if (value == null) return null;
+        await callbacks.onSetClock({ time: value });
+      } else if (slip.kind === 'looks') {
+        const value = await deps.input(`Как ${nameOf(slip.entityId)} выглядит на самом деле`, `В ответе: «${slip.quote}». Это запишется во «Внешность».`, '');
+        if (value == null) return null;
+        await callbacks.onAddFeature({ entityId: slip.entityId, text: value });
+      } else if (slip.kind === 'place') {
+        const value = await deps.input('Где сейчас сцена', `В ответе: «${slip.quote}»`, state.knowledge?.scene?.location ?? '');
+        if (value == null) return null;
+        await callbacks.onSetSceneLocation({ location: value });
+      }
+      await dropSlip(messageIndex, slipIndex);
+      return slip.kind;
+    },
+    onSlipDismiss: ({ messageIndex, slipIndex }) => dropSlip(Number(messageIndex), Number(slipIndex)),
+    /** Keep the text, but tell the narrator once what is actually true. */
+    onSlipRemind: async ({ messageIndex, slipIndex }) => {
+      const slip = slipOf(messageIndex, slipIndex);
+      const state = getState();
+      const who = slip.entityId ? nameOf(slip.entityId) : '';
+      const truth = slip.kind === 'outfit' ? `${who} is still wearing: ${state.world?.wardrobe?.[slip.entityId]?.outfit ?? '(as recorded)'}`
+        : slip.kind === 'time' ? `the time is still ${state.world?.clock?.time || 'as recorded'}`
+          : slip.kind === 'place' ? `the scene is still at ${state.knowledge?.scene?.location || 'the recorded place'}`
+            : slip.kind === 'looks' ? `${who}'s lasting looks are: ${(state.world?.wardrobe?.[slip.entityId]?.features ?? []).map(feature => feature.text).join('; ') || 'as recorded'}`
+            : `${who ? `${who}: ` : ''}${slip.note || 'the item is not where the last reply put it'}`;
+      deps.reminders.add(`correction of the last reply ("${slip.quote}"): ${truth}${slip.note ? ` — ${slip.note}` : ''}`);
+      await dropSlip(messageIndex, slipIndex);
+      deps.refresh();
+    },
+  };
+  return callbacks;
+}

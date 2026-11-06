@@ -1,0 +1,19 @@
+{
+  "name": "sillytavern-kulisy",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Narrator-card companion for SillyTavern: relationships plus who knows what, who is on stage and who has met whom.",
+  "scripts": {
+    "test": "node --test",
+    "check": "node --check index.js && node --test",
+    "pack:zip": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/pack.ps1"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "jsdom": "26.1.0"
+  }
+}

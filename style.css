@@ -1,0 +1,85 @@
+/*
+ * Only what lives in SillyTavern's own DOM: the settings drawer and the message menu.
+ * The Studio and the widget style themselves inside their shadow roots (src/ui/theme.js).
+ * Colours come from the active SillyTavern theme only.
+ */
+.ku-label { display: grid; gap: .3rem; margin-bottom: .6rem; }
+
+.ku-warning {
+  padding: .65rem;
+  border: 1px solid color-mix(in srgb, var(--golden) 60%, var(--SmartThemeBodyColor));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--golden) 14%, transparent);
+}
+
+/* "Check this reply" button lives in every message menu; it makes sense only for bot replies. */
+.mes[is_user="true"] .kulisy-check,
+.mes[is_system="true"] .kulisy-check { display: none; }
+
+/* Who is on stage: chips above the message box. */
+#ku-scene-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 4px 8px 6px;
+  font-size: calc(var(--mainFontSize) * 0.85);
+}
+#ku-scene-chips .ku-chips-label {
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--SmartThemeBodyColor) 65%, transparent);
+  font: inherit;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+#ku-scene-chips .ku-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 2px 10px;
+  border-radius: 20px;
+  border: 1px dashed color-mix(in srgb, var(--SmartThemeBodyColor) 30%, transparent);
+  background: transparent;
+  color: color-mix(in srgb, var(--SmartThemeBodyColor) 60%, transparent);
+  font: inherit;
+  cursor: pointer;
+}
+#ku-scene-chips .ku-chip.on {
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 60%, transparent);
+  background: color-mix(in srgb, var(--SmartThemeQuoteColor) 14%, transparent);
+  color: var(--SmartThemeBodyColor);
+}
+#ku-scene-chips .ku-chip:focus-visible { outline: 2px solid var(--SmartThemeQuoteColor); outline-offset: 1px; }
+#ku-scene-chips .ku-chip-note { font-size: 0.8em; opacity: .7; }
+/* Time and place: small solid pills before the cast; they open the control desk. */
+#ku-scene-chips .ku-chips-place {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 2px 10px;
+  border-radius: 20px;
+  border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 22%, transparent);
+  background: color-mix(in srgb, var(--SmartThemeBodyColor) 6%, transparent);
+  color: var(--SmartThemeBodyColor);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+#ku-scene-chips .ku-chips-place:focus-visible { outline: 2px solid var(--SmartThemeQuoteColor); outline-offset: 1px; }
+
+/* A leak the chronicler found, under the reply. */
+.mes_block .ku-leak {
+  margin: 8px 0 4px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--golden) 60%, var(--SmartThemeBodyColor));
+  background: color-mix(in srgb, var(--golden) 12%, transparent);
+  font-size: calc(var(--mainFontSize) * 0.9);
+}
+.mes_block .ku-leak-text i { color: color-mix(in srgb, var(--golden) 70%, var(--SmartThemeBodyColor)); }
+.mes_block .ku-leak-quote { font-style: italic; opacity: .85; }
+.mes_block .ku-leak-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.mes_block .ku-leak-button { margin: 0; padding: 3px 10px; font-size: 0.9em; }
