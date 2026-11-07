@@ -53,10 +53,29 @@ const shelfOr = value => (Object.hasOwn(WARDROBE_SHELVES, value) ? value : 'char
 const genderOr = value => (Object.hasOwn(WARDROBE_GENDERS, value) ? value : 'female');
 const categoryOr = value => (CATEGORY_IDS.has(value) ? value : 'top');
 
-/** Only a path on this server: a relative /user/images/… path (never a remote URL or data URI). Shared with the library. */
+/**
+ * Only a path on this server (never a remote URL or data URI). Shared with the library:
+ * a relative /user/images/… path, or a picture of the folder storage served by the
+ * server plugin (/api/plugins/kulisy-images/file/<kulisy-wardrobe|kulisy-library>/<name>).
+ */
 export function cleanImagePath(value) {
   const path = String(value ?? '').trim().slice(0, WARDROBE_LIMITS.image);
-  return /^\/?user\/images\/[^?#]+\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(path) && !path.includes('..') ? path : '';
+  if (path.includes('..')) return '';
+  if (/^\/?user\/images\/[^?#]+\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(path)) return path;
+  if (/^\/?api\/plugins\/kulisy-images\/file\/kulisy-(wardrobe|library)\/[\w-]{1,120}\.(png|jpg|webp|gif)$/.test(path)) return path;
+  if (isTreePath(path)) return path;
+  return '';
+}
+
+/** A picture of the wardrobe tree «Гардероб/<полка>/<пол>/<раздел>/файл» (served by the plugin). */
+function isTreePath(path) {
+  const match = /^\/?api\/plugins\/kulisy-images\/wardrobe\/(.+)$/.exec(path);
+  if (!match) return false;
+  const parts = match[1].split('/');
+  if (parts.length < 1 || parts.length > 4) return false;
+  const name = parts.at(-1);
+  if (!/^[^\\/:*?"<>|\u0000-\u001f]{1,200}\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(name) || name.startsWith('.')) return false;
+  return parts.slice(0, -1).every(part => /^[\p{L}\p{N}][\p{L}\p{N} _.()-]{0,59}$/u.test(part) && !part.endsWith('.'));
 }
 
 function cardFrom(id, raw) {
@@ -225,7 +244,29 @@ export function wornCards(wardrobe, cardIds) {
 
 /** The outfit line of a set of cards: their names, in section order. They add up. */
 export function composeOutfit(wardrobe, cardIds) {
-  return wornCards(wardrobe, cardIds).map(wornLabel).join('; ');
+  return wornCards(wardrobe, cardIds).map(outfitLabel).join('; ');
+}
+
+/** The start of a description: up to the first sentence end, at most `max` characters. */
+function leadOf(text, max = 60) {
+  const clean = cleanText(text, 1000);
+  const sentence = clean.split(/(?<=[.!?;])\s/)[0].replace(/[.;]$/, '');
+  return sentence.length > max ? `${sentence.slice(0, max - 1)}…` : sentence;
+}
+
+/**
+ * A card in the short outfit line. A card named only by its section («Волосы»,
+ * «Обувь», «Новая карточка») says nothing, so it is told by the start of its
+ * description: «Волосы: длинные розовые с чёлкой». A real name stays as it is.
+ */
+export function outfitLabel(card) {
+  const section = WARDROBE_CATEGORIES.find(([id]) => id === card?.category)?.[1] ?? '';
+  const name = String(card?.name ?? '').trim().toLocaleLowerCase('ru-RU');
+  const generic = !name || name === section.toLocaleLowerCase('ru-RU') || name === 'новая карточка';
+  const lead = leadOf(card?.description);
+  if (!generic || !lead) return wornLabel(card);
+  const placement = card?.category === 'tattoos' && card.placement ? ` (${card.placement})` : '';
+  return `${section || cardLabel(card)}: ${lead}${placement}`;
 }
 
 /** A card as the narrator reads it: a tattoo says where it is («карп (левое предплечье)»). */

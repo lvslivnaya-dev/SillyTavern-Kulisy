@@ -41,7 +41,11 @@ export const THEME_TOKENS = [
   '--k-mono:var(--monoFontFamily)',
 ].join(';');
 
-/** `:host{…}` block for a shadow root: tokens plus the theme font and text colour. */
+/**
+ * `:host{…}` block for a shadow root: tokens plus the theme font and text colour.
+ * `all:initial` is an author rule, so it beats the browser's `[hidden]{display:none}`:
+ * the host would stay visible when hidden (the widget switched off still showed).
+ */
 export function hostThemeCss(extra = '') {
-  return `:host{all:initial;${THEME_TOKENS};font-family:var(--k-font);color:var(--k-text)${extra ? `;${extra}` : ''}}`;
+  return `:host{all:initial;${THEME_TOKENS};font-family:var(--k-font);color:var(--k-text)${extra ? `;${extra}` : ''}}:host([hidden]){display:none!important}`;
 }

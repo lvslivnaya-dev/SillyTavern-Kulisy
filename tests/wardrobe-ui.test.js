@@ -31,7 +31,7 @@ function closet() {
   return { wardrobe, jacket, pants };
 }
 
-function open() {
+function open(extra = {}) {
   const { wardrobe, jacket, pants } = closet();
   const state = applyOperations(createDefaultState(), [
     createOperation('entity.upsert', mikey), createOperation('entity.upsert', suzu),
@@ -41,7 +41,7 @@ function open() {
   const callbacks = new Proxy({}, { get: (target, name) => (typeof name === 'string' && name.startsWith('on') ? async payload => { calls.push([name, payload]); return { id: 'new' }; } : undefined) });
   const snapshot = () => ({
     ...state, pairs: [], dossiers: {}, leaks: [], slips: [], settings: {}, lorebooks: { available: [], selected: [], cardWorlds: [] },
-    characters: [{ id: mikey.id, name: 'Майки' }, { id: suzu.id, name: 'Судзу' }], personaId: suzu.id, wardrobe,
+    characters: [{ id: mikey.id, name: 'Майки' }, { id: suzu.id, name: 'Судзу' }], personaId: suzu.id, wardrobe, ...extra,
   });
   const studio = createRelationshipStudio({ store: { getSnapshot: snapshot }, open: true, layout: { mode: 'window', tab: 'wardrobe' }, callbacks });
   const shadow = studio.element.shadowRoot;
@@ -121,4 +121,21 @@ test('describing stays inside the section: a hairstyle keeps hair clips but not 
   assert.match(describePrompt('jewelry'), /hair accessories \(they belong to the hairstyle\)/);
   assert.match(describePrompt(null), /First decide which ONE section/);
   assert.match(describePrompt(null), /- makeup: /);
+});
+
+test('the folder «Гардероб»: no plugin, no button; pictures waiting → a banner that takes them in', async () => {
+  const without = open();
+  try {
+    assert.equal(without.byText('Из папки'), undefined);
+    assert.equal(without.shadow.querySelector('.ku-inbox'), null);
+  } finally { without.studio.destroy(); }
+  const { studio, shadow, byText, calls } = open({ inbox: { available: true, count: 3 } });
+  try {
+    assert.ok(byText('Из папки'), 'the toolbar button is there when the folder is');
+    assert.match(shadow.querySelector('.ku-inbox').textContent, /новых картинок: 3/);
+    byText('Забрать').click();
+    await flush();
+    assert.deepEqual(calls.map(([name]) => name).filter(name => /Inbox/.test(name)), ['onWardrobeInboxRefresh', 'onWardrobeImportInbox']);
+    assert.equal(calls.find(([name]) => name === 'onWardrobeImportInbox')[1].describe, false);
+  } finally { studio.destroy(); }
 });

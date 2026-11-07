@@ -338,3 +338,57 @@ test('settings → data: Horae records are found, shown and moved with the chose
     studio?.destroy();
   }
 });
+
+test('settings → data: where pictures go — install hint without the plugin; folder, browse and move with it', async () => {
+  const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+  const calls = [];
+  let plugin = { installed: false };
+  const snapshot = { ...sampleState(), settings: { ...(sampleState().settings ?? {}), imageStorage: 'server' } };
+  const callbacks = {
+    onImageStorageStatus: async () => ({ storage: snapshot.settings.imageStorage, plugin, counts: { server: 2, folder: 0 } }),
+    onBrowseImageFolder: async () => 'D:\Картинки',
+    onSetImageFolder: async ({ folder }) => { calls.push(['folder', folder]); plugin = { ...plugin, folder, ready: true, error: '' }; return folder; },
+    onMoveImages: async ({ to }) => { calls.push(['move', to]); return { moved: 2, failed: 0, leftovers: 0 }; },
+    onSettingsChange: ({ settings }) => { calls.push(['settings', settings]); Object.assign(snapshot.settings, settings); },
+  };
+  let studio;
+  const errors = captureErrors(() => {
+    studio = createRelationshipStudio({ store: { getSnapshot: () => snapshot }, callbacks, open: true, layout: { mode: 'window', tab: 'settings' } });
+  });
+  try {
+    assert.deepEqual(errors, [], errors.join('\n'));
+    const root = studio.element.shadowRoot;
+    [...root.querySelectorAll('.set-nav button')].find(node => node.textContent === 'Данные').click();
+    await tick();
+    const select = () => root.querySelector('select[aria-label="Где хранить картинки"]');
+    assert.equal(select().querySelector('option[value=folder]').disabled, true, 'no plugin, no folder choice');
+    assert.match(root.textContent, /server-plugin\/kulisy-images/);
+
+    plugin = { installed: true, folder: '', ready: false, error: 'Папка не выбрана.', canBrowse: true, admin: true, version: '0.1.0' };
+    studio.render?.();
+    [...root.querySelectorAll('.set-nav button')].find(node => node.textContent === 'Данные').click();
+    await tick();
+    select().value = 'folder';
+    select().dispatchEvent(new window.Event('change'));
+    assert.equal(select().value, 'server', 'a folder that is not ready cannot be chosen');
+    assert.equal(calls.length, 0);
+    [...root.querySelectorAll('button')].find(node => node.textContent === 'Обзор…').click();
+    await tick();
+    assert.equal(root.querySelector('input[aria-label="Папка для картинок"]').value, 'D:\Картинки');
+    [...root.querySelectorAll('button')].find(node => node.textContent === 'Сохранить папку').click();
+    await tick(); await tick();
+    assert.deepEqual(calls[0], ['folder', 'D:\Картинки']);
+    select().value = 'folder';
+    select().dispatchEvent(new window.Event('change'));
+    assert.deepEqual(calls[1], ['settings', { imageStorage: 'folder' }]);
+    studio.render?.();
+    [...root.querySelectorAll('.set-nav button')].find(node => node.textContent === 'Данные').click();
+    await tick();
+    [...root.querySelectorAll('button')].find(node => node.textContent === 'Перенести в папку (2)').click();
+    await tick(); await tick();
+    assert.deepEqual(calls[2], ['move', 'folder']);
+    assert.match(root.querySelector('.status').textContent, /перенесено: 2/);
+  } finally {
+    studio?.destroy();
+  }
+});

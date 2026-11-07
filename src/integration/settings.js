@@ -35,6 +35,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   // Send the narrator the scene block (world-prompt.js) and how big it may be.
   sendScene: true,
   scenePromptCharacters: 1500,
+  // How much of each wardrobe card's description, and of all a character wears, goes into the scene.
+  looksCardCharacters: 300,
+  looksCharacterCharacters: 1200,
   // Weak models can stumble over one big JSON: then the chroniclers get its own request.
   knowledgeSeparateRequest: false,
   // How many not-yet-known events the chronicler is shown per reply.
@@ -48,6 +51,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   itemsDormantAfter: 40,
   // Wardrobe cards and looks (core/wardrobe.js), kept across chats; pictures are files on the server.
   wardrobe: { version: 1, cards: [], looks: [] },
+  // Where new pictures go: 'server' (user/images) or 'folder' (a folder on the computer, via the server plugin kulisy-images).
+  imageStorage: 'server',
   // Which model describes wardrobe pictures (vision.js): main | profile | custom.
   wardrobeVision: { mode: 'main', profileId: '', url: '', key: '', model: '', maxTokens: 700 },
   // The chronicle (chronicle.js): summaries of scenes, chapters, arcs. Off until switched on.

@@ -45,7 +45,12 @@ import { dormantItemIds } from './src/integration/item-tidy.js';
 import { aliasOperations, aliasesFromBooks } from './src/integration/name-sources.js';
 import { createWardrobeCallbacks, createWardrobeStore } from './src/integration/wardrobe-actions.js';
 import { createHoraeCallbacks } from './src/integration/horae-import.js';
-import { LIBRARY_IMAGE_FOLDER, deleteWardrobeImage, storedImageForModel, uploadWardrobeImage } from './src/integration/wardrobe-images.js';
+import {
+  LIBRARY_IMAGE_FOLDER, browseImageFolder, copyImageTo, deleteWardrobeImage, folderStorageStatus, isTreeImage, listInbox, moveTreeImage, prepareInbox,
+  setImageFolder, storedImageForModel, treeDirOf, uploadToTree, uploadWardrobeImage,
+} from './src/integration/wardrobe-images.js';
+import { inboxDirectories, newTreeFiles, treeDirFor } from './src/integration/wardrobe-inbox.js';
+import { countImages, moveImages } from './src/integration/image-move.js';
 import { TEST_IMAGE, TEST_PROMPT, askAboutImage, listVisionChoices, visionSettings } from './src/integration/vision.js';
 import { hideSummarized } from './src/integration/chronicle-run.js';
 import { createChronicleRunner } from './src/integration/chronicle-actions.js';
@@ -121,6 +126,10 @@ export async function init() {
   if (controller) return controller;
   const context = SillyTavern.getContext();
   const settings = getSettings(context);
+  // State of the folder «Гардероб» (see refreshInbox); declared early: the snapshot reads it.
+  let inboxInfo = { available: false, count: 0, reason: '' };
+  let inboxPrepared = false;
+  let inboxChecking = null;
   // Places kept across chats (folders like a gallery); see location-library-actions.js.
   // A change to the library or the wardrobe redraws the Studio once (after the current step),
   // so a saved card or place shows as saved, not as it was.
@@ -184,7 +193,10 @@ export async function init() {
         knowledgeCandidates: settings.knowledgeCandidates,
         knowledgePromptCharacters: settings.knowledgePromptCharacters,
         scenePromptCharacters: settings.scenePromptCharacters,
+        looksCardCharacters: settings.looksCardCharacters,
+        looksCharacterCharacters: settings.looksCharacterCharacters,
         itemsDormantAfter: settings.itemsDormantAfter ?? 40,
+        imageStorage: settings.imageStorage === 'folder' ? 'folder' : 'server',
         largeChangeThreshold: settings.largeChangeThreshold,
         chronicle: structuredClone(settings.chronicle ?? {}),
         aux: structuredClone(settings.aux),
@@ -210,6 +222,7 @@ export async function init() {
       linkedItemIds: [...linkedItems(state).keys()],
       chatKey: String(SillyTavern.getContext().getCurrentChatId?.() ?? ''),
       wardrobe: wardrobeStore.get(),
+      inbox: { ...inboxInfo },
       looksFit: looksStatus(state),
       dormantItemIds: shadeItems(state),
       duplicates: duplicateCandidates(state).map(pair => ({ ...pair, fromName: state.entities[pair.fromId]?.name ?? '', intoName: state.entities[pair.intoId]?.name ?? '' })),
@@ -442,6 +455,7 @@ export async function init() {
       skipItemIds: shadeItems(targetState),
       reminders: reminders.list(),
       maxCharacters: Math.max(300, Math.min(6000, Number(settings.scenePromptCharacters) || 1500)),
+      looksLimits: { card: settings.looksCardCharacters, character: settings.looksCharacterCharacters },
     };
   }
 
@@ -630,11 +644,12 @@ export async function init() {
       const limit = Math.round(Number(patch.headcanonLimit));
       if (Number.isFinite(limit)) settings.headcanonLimit = Math.max(1, Math.min(30, limit));
     }
-    for (const [key, min, max] of [['scenePromptCharacters', 300, 6000], ['largeChangeThreshold', 4, 25], ['itemsDormantAfter', 0, 500]]) {
+    for (const [key, min, max] of [['scenePromptCharacters', 300, 6000], ['largeChangeThreshold', 4, 25], ['itemsDormantAfter', 0, 500], ['looksCardCharacters', 80, 1000], ['looksCharacterCharacters', 200, 4000]]) {
       if (!Object.hasOwn(patch, key)) continue;
       const value = Math.round(Number(patch[key]));
       if (Number.isFinite(value)) settings[key] = Math.max(min, Math.min(max, value));
     }
+    if (Object.hasOwn(patch, 'imageStorage')) settings.imageStorage = patch.imageStorage === 'folder' ? 'folder' : 'server';
     if (patch.aux && typeof patch.aux === 'object') settings.aux = normalizeAux({ ...settings.aux, ...patch.aux });
     if (patch.wardrobeVision && typeof patch.wardrobeVision === 'object') settings.wardrobeVision = visionSettings({ ...settings.wardrobeVision, ...patch.wardrobeVision });
     if (patch.embeddings && typeof patch.embeddings === 'object') {
@@ -1127,6 +1142,18 @@ export async function init() {
     },
   };
 
+  /** The picture model, with a time limit: a request that never comes back must not stall a whole batch. */
+  const PICTURE_TIMEOUT_MS = 120_000;
+  function askPicture(dataUrl, prompt) {
+    return withBusy('Описываю картинку…', () => new Promise((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Модель для картинок не ответила за 2 минуты. Проверьте её в «Настройки → Модели и API → Картинки».')), PICTURE_TIMEOUT_MS);
+      Promise.resolve()
+        .then(() => askAboutImage(SillyTavern.getContext(), settings.wardrobeVision, dataUrl, prompt))
+        .then(resolve, reject)
+        .finally(() => clearTimeout(timer));
+    }));
+  }
+
   const libraryCallbacks = createLibraryCallbacks({
     library: locationLibrary,
     getState: () => state,
@@ -1143,10 +1170,10 @@ export async function init() {
     },
     notify: text => globalThis.toastr?.success?.(text, 'Кулисы'),
     // Pictures of places and things: the same server folder rules and the same picture model as the wardrobe.
-    upload: (dataUrl, name) => uploadWardrobeImage(SillyTavern.getContext(), dataUrl, name, LIBRARY_IMAGE_FOLDER),
+    upload: (dataUrl, name) => uploadWardrobeImage(SillyTavern.getContext(), dataUrl, name, LIBRARY_IMAGE_FOLDER, settings.imageStorage),
     removeImage: path => deleteWardrobeImage(SillyTavern.getContext(), path),
     imageForModel: path => storedImageForModel(path),
-    ask: (dataUrl, prompt) => withBusy('Описываю картинку…', () => askAboutImage(SillyTavern.getContext(), settings.wardrobeVision, dataUrl, prompt)),
+    ask: (dataUrl, prompt) => askPicture(dataUrl, prompt),
     log: (level, text, error) => logEvent(level, text, error),
   });
 
@@ -1169,6 +1196,35 @@ export async function init() {
     refresh: () => { refreshPrompt(); notify(); },
   });
 
+  // The folder «Гардероб» (wardrobe-inbox.js): how many pictures wait there. Checked at start,
+  // when the tab comes back into focus (after dropping files in Explorer) and after an import.
+  function refreshInbox() {
+    if (inboxChecking) return inboxChecking;
+    inboxChecking = (async () => {
+      let next = { available: false, count: 0, reason: '' };
+      try {
+        const plugin = await folderStorageStatus();
+        if (!plugin.installed) next.reason = 'no-plugin';
+        else if (!plugin.ready) next.reason = 'no-folder';
+        else {
+          if (!inboxPrepared) { await prepareInbox(SillyTavern.getContext(), inboxDirectories()); inboxPrepared = true; }
+          next = { available: true, count: newTreeFiles(await listInbox(), wardrobeStore.get().cards).length, reason: '' };
+        }
+      } catch (error) {
+        // A plugin older than 0.3.0 has no tree: the rest of the folder storage still works.
+        next = { available: false, count: 0, reason: 'error' };
+        logEvent('warn', 'Папку «Гардероб» не удалось проверить', error);
+      }
+      const changed = next.available !== inboxInfo.available || next.count !== inboxInfo.count || next.reason !== inboxInfo.reason;
+      inboxInfo = next;
+      if (changed) notify();
+      return inboxInfo;
+    })().finally(() => { inboxChecking = null; });
+    return inboxChecking;
+  }
+  globalThis.addEventListener?.('focus', () => { refreshInbox().catch(() => {}); });
+  refreshInbox().catch(() => {});
+
   const wardrobeCallbacks = createWardrobeCallbacks({
     store: wardrobeStore,
     getState: () => state,
@@ -1177,10 +1233,17 @@ export async function init() {
       const ctx = SillyTavern.getContext();
       return (await ctx.Popup.show.confirm(title, escapeHtml(text))) === ctx.POPUP_RESULT.AFFIRMATIVE;
     },
-    upload: (dataUrl, name) => uploadWardrobeImage(SillyTavern.getContext(), dataUrl, name),
+    // In the folder, a wardrobe picture goes into its section folder of «Гардероб», named after the card.
+    upload: (dataUrl, name, card) => (settings.imageStorage === 'folder'
+      ? uploadToTree(SillyTavern.getContext(), dataUrl, treeDirFor(card), card?.name || 'картинка')
+      : uploadWardrobeImage(SillyTavern.getContext(), dataUrl, name)),
+    relocate: (path, dir) => moveTreeImage(SillyTavern.getContext(), path, dir),
+    isTreeImage,
+    treeDirOf,
+    inbox: { list: () => listInbox() },
     removeImage: path => deleteWardrobeImage(SillyTavern.getContext(), path),
     imageForModel: path => storedImageForModel(path),
-    ask: (dataUrl, prompt) => withBusy('Описываю картинку…', () => askAboutImage(SillyTavern.getContext(), settings.wardrobeVision, dataUrl, prompt)),
+    ask: (dataUrl, prompt) => askPicture(dataUrl, prompt),
     log: (level, text, error) => logEvent(level, text, error),
   });
 
@@ -1301,6 +1364,10 @@ export async function init() {
     ...chronicleRunner.callbacks,
     ...worldCallbacks,
     ...wardrobeCallbacks,
+    onWardrobeImportInbox: async payload => {
+      try { return await wardrobeCallbacks.onWardrobeImportInbox(payload); }
+      finally { refreshInbox().catch(() => {}); }
+    },
     ...horaeCallbacks,
     onSetTavernPersona: setTavernPersona,
     onAddTriangle: async ({ centerId, firstId, secondId, name }) => {
@@ -1632,6 +1699,41 @@ export async function init() {
       return `Работает: вектор из ${scene.length} чисел за ${seconds} с, сходство примера ${cosine(scene, fact).toFixed(2)}.`;
     },
     onAuxPurposes: () => ({ ...AUX_PURPOSES }),
+    /** Where pictures go and what the folder plugin says; never throws (a missing plugin is a normal answer). */
+    onWardrobeInboxRefresh: () => refreshInbox(),
+    onImageStorageStatus: async () => ({
+      storage: settings.imageStorage === 'folder' ? 'folder' : 'server',
+      plugin: await folderStorageStatus(),
+      counts: countImages(wardrobeStore.get(), locationLibrary.get()),
+    }),
+    onSetImageFolder: async ({ folder }) => {
+      const saved = await setImageFolder(SillyTavern.getContext(), folder);
+      logEvent('info', saved ? 'Папка для картинок выбрана' : 'Папка для картинок забыта');
+      inboxPrepared = false;
+      refreshInbox().catch(() => {});
+      if (!saved && settings.imageStorage === 'folder') await changeSettings({ settings: { imageStorage: 'server' } });
+      return saved;
+    },
+    onBrowseImageFolder: () => browseImageFolder(SillyTavern.getContext()),
+    /** Moves every picture into the chosen storage: copy, save the new paths, delete the old files. */
+    onMoveImages: async ({ to }) => {
+      if (to === 'folder') {
+        const plugin = await folderStorageStatus();
+        if (!plugin.installed) throw new Error('Плагин «kulisy-images» не найден — перенос в папку невозможен.');
+        if (!plugin.ready) throw new Error(plugin.error || 'Папка для картинок не выбрана.');
+      }
+      const result = await withBusy('Переношу картинки…', () => moveImages(to, {
+        getWardrobe: () => wardrobeStore.get(),
+        setWardrobe: next => wardrobeStore.set(next),
+        getLibrary: () => locationLibrary.get(),
+        setLibrary: next => locationLibrary.set(next),
+        copy: (path, storage, tree) => copyImageTo(SillyTavern.getContext(), path, storage, tree),
+        remove: path => deleteWardrobeImage(SillyTavern.getContext(), path),
+        log: (level, text, error) => logEvent(level, text, error),
+      }));
+      logEvent('info', `Перенос картинок (${to}): перенесено ${result.moved}, не вышло ${result.failed}, старых копий осталось ${result.leftovers}`);
+      return result;
+    },
     /** Does the chosen model see pictures? A red square, one word back. */
     onTestVision: async ({ vision }) => {
       const answer = await withBusy('Проверяю модель для картинок…', () => askAboutImage(SillyTavern.getContext(), vision ?? settings.wardrobeVision, TEST_IMAGE, TEST_PROMPT));

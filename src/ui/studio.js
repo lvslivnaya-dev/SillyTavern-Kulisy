@@ -4,6 +4,7 @@
 } from './helpers.js';
 import { hostThemeCss } from './theme.js';
 import { icon } from './icons.js';
+import { looksIssues } from '../integration/world-prompt.js';
 import { DOCK_WIDTH, NAV_GROUPS, NAV_TABS, PENDING_TABS, RELATION_TABS, clampDockWidth, effectiveMode, normalizeLayout } from './layout.js';
 import { createDialogs } from './pages/dialogs.js';
 import { createCharactersPage } from './pages/characters.js';
@@ -541,8 +542,8 @@ export function createRelationshipStudio(options = {}) {
         const item = button('', id === tab ? 'active' : '', () => setTab(id), pending ? `${label} — раздел в работе` : label);
         item.append(icon(iconName), element('span', { className: 'nav-label', text: label }));
         if (pending) item.append(element('span', { className: 'soon', text: 'скоро' }));
-        const leakCount = id === 'leaks' ? (snapshot.leaks?.length ?? 0) + (snapshot.slips?.length ?? 0) : 0;
-        if (leakCount) item.append(element('span', { className: 'badge', text: String(leakCount), 'aria-label': `открытых утечек и ляпов: ${leakCount}` }));
+        const leakCount = id === 'leaks' ? (snapshot.leaks?.length ?? 0) + (snapshot.slips?.length ?? 0) + looksIssues(snapshot.looksFit).length : 0;
+        if (leakCount) item.append(element('span', { className: 'badge', text: String(leakCount), 'aria-label': `открыто проверок (утечки, ляпы, одежда): ${leakCount}` }));
         item.setAttribute('aria-current', id === tab ? 'page' : 'false');
         nav.append(item);
       }

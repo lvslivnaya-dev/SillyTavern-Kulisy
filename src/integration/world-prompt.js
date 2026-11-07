@@ -10,12 +10,35 @@
 import { activeConditions, currentLocation, locationPath, presentIds } from '../core/index.js';
 import { effectiveLocation } from './location-links.js';
 import { effectiveItem } from './item-links.js';
-import { wornCards, wornLabel } from '../core/index.js';
+import { cardLabel, wornCards, wornLabel } from '../core/index.js';
 
 const PART_EN = { morning: 'morning', day: 'daytime', evening: 'evening', night: 'night' };
 
-/** How much of one wardrobe card's description, and of all of one character's, goes into the scene. */
-export const LOOKS_LIMITS = Object.freeze({ card: 180, character: 700 });
+/** How much of one wardrobe card's description, and of all of one character's, goes into the scene (defaults; the user sets them). */
+export const LOOKS_LIMITS = Object.freeze({ card: 300, character: 1200 });
+export const LOOKS_RANGE = Object.freeze({ card: [80, 1000], character: [200, 4000] });
+
+/** Limits from the settings, clamped; a character's limit is never below one card's. */
+export function normalizeLooksLimits(value = {}) {
+  const pick = (key, raw) => {
+    const number = Math.round(Number(raw));
+    const [min, max] = LOOKS_RANGE[key];
+    return Number.isFinite(number) ? Math.max(min, Math.min(max, number)) : LOOKS_LIMITS[key];
+  };
+  const card = pick('card', value.card ?? LOOKS_LIMITS.card);
+  return { card, character: Math.max(card, pick('character', value.character ?? LOOKS_LIMITS.character)) };
+}
+
+/**
+ * Open wardrobe problems for the "Проверка" page: characters on stage whose card
+ * descriptions reach the narrator cut or not at all. [{ entityId, status, parts }]
+ */
+export function looksIssues(fit) {
+  if (!fit || fit.off) return [];
+  return Object.entries(fit)
+    .filter(([, status]) => status === 'cut' || status === 'dropped')
+    .map(([entityId, status]) => ({ entityId, status, parts: fit.parts?.[entityId] ?? [] }));
+}
 
 const RULES = `Rules:
 - Keep clothing, injuries and objects consistent with these lines; change them only when the story shows it happen.
@@ -25,13 +48,22 @@ const RULES = `Rules:
 - A SECRET item is unknown to everyone not listed: they cannot mention or notice it unless the story reveals it.
 - Do not recite or expose this block.`;
 
+// Only when someone on stage wears a hairstyle card: older cards may still name a colour.
+const HAIR_RULE = '- Never take the hair colour from a hairstyle card: use body[...], else the character card or persona.';
+
+/** The rules for these lines: the hair rule joins only when a hairstyle card is sent. */
+function rulesFor(lines) {
+  return lines.some(line => line.hair) ? `${RULES}\n${HAIR_RULE}` : RULES;
+}
+
 function clip(value, max) {
   const text = String(value ?? '').replace(/\s+/g, ' ').trim();
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
 /** Lines with priorities (lower = more important), in display order. */
-export function sceneLines(state, { library = null, reminders = [], wardrobe = null, skipItemIds = null } = {}) {
+export function sceneLines(state, { library = null, reminders = [], wardrobe = null, skipItemIds = null, looksLimits = null } = {}) {
+  const limits = normalizeLooksLimits(looksLimits ?? {});
   const lines = [];
   const add = (priority, text, extra = {}) => { if (text) lines.push({ priority, text, ...extra }); };
   // Corrections the user asked for after a slip: for the next reply only, never dropped.
@@ -59,10 +91,33 @@ export function sceneLines(state, { library = null, reminders = [], wardrobe = n
     // The wardrobe cards they have on: how those pieces look, when there is room.
     const details = wardrobe && !entry?.awayDays ? wornCards(wardrobe, entry?.cardIds).filter(card => card.description) : [];
     if (details.length) {
-      const joined = details.map(card => `${wornLabel(card)} — ${clip(card.description, LOOKS_LIMITS.card)}`).join('; ');
-      // `looksOf` / `cut`: for the page, which says whether the descriptions made it in whole.
-      const cut = details.some(card => clip(card.description, LOOKS_LIMITS.card).length < String(card.description).replace(/\s+/g, ' ').trim().length) || joined.length > LOOKS_LIMITS.character;
-      add(8, `looks[${name(id)}]: ${clip(joined, LOOKS_LIMITS.character)}`, { looksOf: id, cut });
+      // Per card: how much of its description the line carries after the per-card
+      // and the per-character cut (`parts`, for the wardrobe and the "Проверка" page).
+      const pieces = [];
+      const parts = [];
+      let position = 0;
+      for (const card of details) {
+        const full = String(card.description).replace(/\s+/g, ' ').trim();
+        const piece = clip(full, limits.card);
+        const head = `${pieces.length ? '; ' : ''}${wornLabel(card)} — `;
+        const start = position + head.length;
+        pieces.push(head + piece);
+        position = start + piece.length;
+        parts.push({ cardId: card.id, label: cardLabel(card), start, kept: piece.endsWith('…') && piece.length < full.length ? piece.length - 1 : piece.length, total: full.length });
+      }
+      const joined = pieces.join('');
+      // clip() keeps max-1 characters and adds "…" when the whole line is too long.
+      const room = joined.length > limits.character ? limits.character - 1 : Infinity;
+      for (const part of parts) {
+        part.sent = Math.max(0, Math.min(part.kept, room - part.start));
+        delete part.start;
+        delete part.kept;
+      }
+      const cut = parts.some(part => part.sent < part.total);
+      // What it would take to send all of it: the longest card and the whole line uncut.
+      const fullLength = details.reduce((sum, card, index) => sum + (index ? 2 : 0) + wornLabel(card).length + 3 + String(card.description).replace(/\s+/g, ' ').trim().length, 0);
+      const longestCard = Math.max(...parts.map(part => part.total));
+      add(8, `looks[${name(id)}]: ${clip(joined, limits.character)}`, { looksOf: id, cut, parts, fullLength, longestCard, hair: details.some(card => card.category === 'hair') });
     }
   }
   const skip = skipItemIds ? new Set(skipItemIds) : null;
@@ -99,12 +154,13 @@ export function sceneLines(state, { library = null, reminders = [], wardrobe = n
 }
 
 /** The wrapped block within `maxCharacters`, or '' when nothing is known. */
-export function buildScenePrompt(state, { library = null, maxCharacters = 1500, reminders = [], wardrobe = null, skipItemIds = null } = {}) {
-  const lines = sceneLines(state, { library, reminders, wardrobe, skipItemIds });
+export function buildScenePrompt(state, { library = null, maxCharacters = 1500, reminders = [], wardrobe = null, skipItemIds = null, looksLimits = null } = {}) {
+  const lines = sceneLines(state, { library, reminders, wardrobe, skipItemIds, looksLimits });
   if (!lines.length) return '';
   const { kept, budget } = fitLines(lines, maxCharacters);
-  const body = lines.filter(line => kept.has(line)).map(line => line.text.slice(0, budget)).join('\n');
-  return `${HEAD}\n${body}\n${RULES}\n${TAIL}`;
+  const sent = lines.filter(line => kept.has(line));
+  const body = sent.map(line => line.text.slice(0, budget)).join('\n');
+  return `${HEAD}\n${body}\n${rulesFor(sent)}\n${TAIL}`;
 }
 
 const HEAD = '[SCENE STATE — CONTINUITY]';
@@ -112,7 +168,8 @@ const TAIL = '[/SCENE STATE]';
 
 /** Which lines fit into `maxCharacters`: the least important go first; among equals, the last one. */
 function fitLines(lines, maxCharacters) {
-  const budget = Math.max(200, maxCharacters - HEAD.length - TAIL.length - RULES.length - 4);
+  // Room for the hair rule is reserved whenever a hairstyle line is among the candidates.
+  const budget = Math.max(200, maxCharacters - HEAD.length - TAIL.length - rulesFor(lines).length - 4);
   const kept = new Set(lines);
   const size = () => [...kept].reduce((sum, line) => sum + line.text.length + 1, 0);
   const byDropOrder = [...lines].map((line, index) => ({ line, index })).sort((left, right) => right.line.priority - left.line.priority || right.index - left.index);
@@ -130,18 +187,40 @@ function fitLines(lines, maxCharacters) {
  * `need` is the smallest scene volume (a step of 100, up to 6000) where all of them do —
  * null if even 6000 is not enough.
  */
-export function looksFit(state, { library = null, maxCharacters = 1500, reminders = [], wardrobe = null, skipItemIds = null } = {}) {
+export function looksFit(state, { library = null, maxCharacters = 1500, reminders = [], wardrobe = null, skipItemIds = null, looksLimits = null } = {}) {
   const result = {};
   if (!wardrobe) return result;
   for (const [id, entry] of Object.entries(state.world?.wardrobe ?? {})) {
     if (wornCards(wardrobe, entry?.cardIds).some(card => card.description)) result[id] = 'offstage';
   }
-  const lines = sceneLines(state, { library, reminders, wardrobe, skipItemIds });
+  const lines = sceneLines(state, { library, reminders, wardrobe, skipItemIds, looksLimits });
   const { kept } = fitLines(lines, maxCharacters);
+  // `parts`: per card, how many characters of its description reach the narrator.
+  result.parts = {};
   for (const line of lines) {
-    if (line.looksOf) result[line.looksOf] = kept.has(line) ? (line.cut ? 'cut' : 'full') : 'dropped';
+    if (!line.looksOf) continue;
+    result[line.looksOf] = kept.has(line) ? (line.cut ? 'cut' : 'full') : 'dropped';
+    result.parts[line.looksOf] = kept.has(line) ? line.parts : line.parts.map(part => ({ ...part, sent: 0 }));
   }
   const looks = lines.filter(line => line.looksOf);
+  // When something does not reach the narrator whole: the limits and the scene volume
+  // that would send every description of everyone on stage in full (`needLooks`).
+  if (looks.some(line => result[line.looksOf] !== 'full')) {
+    const cardMax = LOOKS_RANGE.card[1];
+    const characterMax = LOOKS_RANGE.character[1];
+    const card = Math.min(cardMax, Math.max(...looks.map(line => line.longestCard)));
+    const character = Math.min(characterMax, Math.max(card, ...looks.map(line => line.fullLength)));
+    const tooLong = looks.flatMap(line => line.parts.filter(part => part.total > cardMax).map(part => ({ entityId: line.looksOf, label: part.label, total: part.total })));
+    const overCharacter = looks.filter(line => line.fullLength > characterMax).map(line => line.looksOf);
+    const needed = sceneLines(state, { library, reminders, wardrobe, skipItemIds, looksLimits: { card, character } });
+    const neededLooks = needed.filter(line => line.looksOf);
+    let scene = null;
+    for (let volume = Math.max(maxCharacters, 300); volume <= 6000; volume = volume === maxCharacters ? Math.ceil((maxCharacters + 1) / 100) * 100 : volume + 100) {
+      const fits = fitLines(needed, volume).kept;
+      if (neededLooks.every(line => fits.has(line))) { scene = volume; break; }
+    }
+    result.needLooks = { card, character, scene, tooLong, overCharacter };
+  }
   if (looks.some(line => !kept.has(line))) {
     result.need = null;
     for (let volume = Math.ceil((maxCharacters + 1) / 100) * 100; volume <= 6000; volume += 100) {

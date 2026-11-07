@@ -29,7 +29,7 @@ const CATEGORY_LIST = WARDROBE_CATEGORIES.map(([id, label]) => `${id} (${label})
  * mentions hair or skin. Pictures show whole people, so the boundary is spelled out.
  */
 export const SECTION_SCOPE = Object.freeze({
-  hair: 'the HAIRSTYLE only: length, colour, texture, cut, how it is styled; anything worn IN the hair (clips, pins, ribbons, hair ties, flowers, hair chains) is part of it. Leave out the face, eyes, skin, make-up, earrings, neck jewellery and all clothing.',
+  hair: 'the HAIRSTYLE only: length, texture, cut, how it is styled; anything worn IN the hair (clips, pins, ribbons, hair ties, flowers, hair chains) is part of it, with their colours. NEVER name the colour of the hair itself (no "чёрные", "рыжие", "блонд", "светлые", "тёмные", no dyed tips or highlights): the hair colour comes from the character, not from the card, so write "волосы" without a colour. Leave out the face, eyes, skin, make-up, earrings, neck jewellery and all clothing.',
   top: 'the TOP garment only (shirt, T-shirt, blouse, sweater, hoodie, tank top, crop top, corset worn as a top). Leave out jackets and coats worn over it, trousers, skirts, hair, skin, body, jewellery.',
   pants: 'the TROUSERS only (trousers, jeans, shorts, leggings) including a belt sewn into them. Leave out the top, shoes, a separate belt, hair, skin, body.',
   skirts: 'the SKIRT only. Leave out the top, tights, shoes, hair, skin, body.',
@@ -47,6 +47,8 @@ export const SECTION_SCOPE = Object.freeze({
   sets: 'the WHOLE OUTFIT shown together, as one card: every garment, the shoes and the accessories that are part of it, listed from top to bottom with colours and materials. Leave out the hair, make-up, skin, body, face, pose and background.',
 });
 
+// Catalogue, not prose: the narrator needs the facts, briefly.
+const STYLE = 'Write like a precise shop catalogue, not like a novel: plain factual Russian, short sentences, concrete terms (garment type, colour, material, cut, fit, length, fastenings, print, details). No metaphors, no comparisons, no evaluative or emotional words (элегантный, изысканный, нежный, дерзкий, подчёркивает, создаёт образ), no impressions or mood. Say each fact once; skip what is not visible.';
 const NEVER = 'Never describe the person: no body, skin colour, face, age, figure, pose, mood, setting or background, and nothing outside the section (a tattoo may say where on the body it is, nothing more). If the thing of the section is not visible, say so in the description.';
 
 /**
@@ -59,15 +61,20 @@ export function describePrompt(category = null, { placement = '' } = {}) {
     ? `\nThe user says this tattoo is on: "${String(placement).trim().slice(0, 120)}". Use exactly this placement in the description (in Russian); do not guess another one, even if the picture shows a different body part.`
     : '';
   if (scope) {
+    const contents = category === 'hair'
+      ? 'length, texture, cut, how it is styled, what is worn in the hair; never the hair colour'
+      : 'what it is, colour, material, cut or shape, notable details, how it is worn';
     return `You fill a card of a roleplay wardrobe from this picture. Section: ${category}. Describe ${scope}${where}
 ${NEVER}
-Return JSON only: {"name":"short Russian name of this piece, 2-6 words","gender":"female, unisex or male (unisex: worn by anyone the same way)","description":"Russian, 2-5 sentences: what it is, colour, material, cut or shape, notable details, how it is worn"}.`;
+${STYLE}
+Return JSON only: {"name":"short Russian name of this piece, 2-6 words${category === 'hair' ? ', without the hair colour' : ''}","gender":"female, unisex or male (unisex: worn by anyone the same way)","description":"Russian, 1-3 short factual sentences, at most 300 characters: ${contents}"}.`;
   }
   return `You fill a card of a roleplay wardrobe from this picture. First decide which ONE section the picture is about: ${CATEGORY_LIST}. A picture of a complete outfit the user wants as one card is "sets".
 Then describe only what that section covers:
 ${Object.entries(SECTION_SCOPE).map(([id, text]) => `- ${id}: ${text}`).join('\n')}
 ${NEVER}
-Return JSON only: {"name":"short Russian name, 2-6 words","category":"the section ID","gender":"female, unisex or male (unisex: worn by anyone the same way)","description":"Russian, 2-5 sentences: what it is, colour, material, cut or shape, notable details, how it is worn"}.`;
+${STYLE}
+Return JSON only: {"name":"short Russian name, 2-6 words","category":"the section ID","gender":"female, unisex or male (unisex: worn by anyone the same way)","description":"Russian, 1-3 short factual sentences, at most 300 characters: what it is, colour, material, cut or shape, notable details, how it is worn"}.`;
 }
 
 /** A picture of a place for the location library: the place itself, never the people in it. */
@@ -133,12 +140,16 @@ export async function askAboutImage(context, rawSettings, dataUrl, prompt = DESC
 
 /** The model's answer as card fields: { name, category, gender, description } (missing parts are ''). */
 export function parseDescription(text) {
-  const raw = String(text ?? '').trim();
-  const match = raw.match(/\{[\s\S]*\}/);
-  let data = null;
-  if (match) { try { data = JSON.parse(match[0]); } catch { data = null; } }
-  // A model that ignored the format still gave a description: keep it as is.
-  if (!data || typeof data !== 'object') return { name: '', category: '', gender: '', description: raw.replace(/^```\w*|```$/g, '').trim().slice(0, 3000) };
+  // Thinking models put their reasoning before the answer: in <think> tags, or as plain
+  // text that may itself quote the JSON template. The answer is the LAST object that parses.
+  const raw = String(text ?? '').replace(/<think(?:ing)?>[\s\S]*?<\/think(?:ing)?>/gi, '').trim();
+  const data = lastJsonObject(raw);
+  if (!data) {
+    // A model that ignored the format still gave a description: keep it as is.
+    // But a reply that tried JSON and broke (reasoning, cut by the token limit) is not one.
+    if (raw.includes('{')) throw new Error('Модель вернула размышления или обрезанный ответ вместо JSON. Увеличьте лимит токенов в «Настройки → Модели и API → Картинки» или выберите модель без размышлений.');
+    return { name: '', category: '', gender: '', description: raw.replace(/^```\w*|```$/g, '').trim().slice(0, 3000) };
+  }
   const categories = new Set(WARDROBE_CATEGORIES.map(([id]) => id));
   return {
     name: String(data.name ?? '').replace(/\s+/g, ' ').trim().slice(0, 120),
@@ -147,6 +158,42 @@ export function parseDescription(text) {
     description: String(data.description ?? '').trim().slice(0, 3000),
     ...(Array.isArray(data.traits) ? { traits: data.traits.map(trait => String(trait ?? '').trim()).filter(Boolean).slice(0, 8) } : {}),
   };
+}
+
+/**
+ * The last {...} in `text` that parses as a card answer (has a name or a description), or null.
+ * Line breaks are turned into spaces first: some proxies break lines inside keys ("name\n").
+ */
+function lastJsonObject(text) {
+  const flat = text.replace(/\r?\n/g, ' ');
+  for (let start = flat.lastIndexOf('{'); start >= 0; start = flat.lastIndexOf('{', start - 1)) {
+    const end = closingBrace(flat, start);
+    if (end < 0) continue;
+    let parsed;
+    try { parsed = JSON.parse(flat.slice(start, end + 1)); } catch { continue; }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+    const data = Object.fromEntries(Object.entries(parsed).map(([key, value]) => [key.trim(), value]));
+    // The template quoted in the reasoning ({"name":"...", …}) is not an answer.
+    const filled = value => typeof value === 'string' && /[^.\s…]/.test(value);
+    if (filled(data.description) || filled(data.name)) return data;
+  }
+  return null;
+}
+
+/** Index of the brace that closes the one at `start` (strings respected), or -1. */
+function closingBrace(text, start) {
+  let depth = 0;
+  let inString = false;
+  for (let index = start; index < text.length; index++) {
+    const char = text[index];
+    if (inString) {
+      if (char === '\\') index++;
+      else if (char === '"') inString = false;
+    } else if (char === '"') inString = true;
+    else if (char === '{') depth++;
+    else if (char === '}' && --depth === 0) return index;
+  }
+  return -1;
 }
 
 /** What the settings page offers: the profiles, and whether «Как у таверны» can see pictures at all. */

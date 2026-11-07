@@ -3,6 +3,8 @@ import { icon } from '../icons.js';
 import { activeConditions, folderPath, locationPath } from '../../core/index.js';
 import { effectiveLocation } from '../../integration/location-links.js';
 import { effectiveItem } from '../../integration/item-links.js';
+import { looksIssues } from '../../integration/world-prompt.js';
+import { nextSceneText } from '../../integration/chronicle-actions.js';
 
 /**
  * The scene and its world: «Сейчас» (the control desk), places and things (each:
@@ -288,7 +290,7 @@ export function createWorldPages(ctx) {
     view.append(main);
 
     const reply = lastReply();
-    const checks = (state.leaks?.length ?? 0) + (state.slips?.length ?? 0);
+    const checks = (state.leaks?.length ?? 0) + (state.slips?.length ?? 0) + looksIssues(state.looksFit).length;
     const feed = element('aside', { className: 'ku-feed', 'aria-label': 'Что изменил последний ответ' }, [
       element('div', { className: 'ku-row' }, [element('span', { className: 'section-title', text: reply.index >= 0 ? `Последний ответ · #${reply.index}` : 'Последний ответ' })]),
     ]);
@@ -324,8 +326,16 @@ export function createWorldPages(ctx) {
     const box = element('div', { className: 'ku-facts' });
     const entry = world().wardrobe?.[id] ?? { outfit: '', conditions: [] };
     const outfit = element('textarea', { rows: 2, value: entry.outfit ?? '', 'aria-label': 'Одежда', placeholder: 'Что надето' });
-    box.append(element('p', { className: 'section-title', text: 'Одет(а)' }), outfit, element('div', { className: 'ku-row' }, [
-      button('Сохранить', 'btn primary small', () => attempt(() => act('onSetOutfit', { entityId: id, outfit: outfit.value }, 'outfit-set'), 'Одежда сохранена')),
+    const hasCards = Boolean(entry.cardIds?.length);
+    box.append(element('p', { className: 'section-title', text: 'Одет(а)' }), outfit);
+    if (hasCards) box.append(element('p', { className: 'muted ku-small', text: 'Коротко, что надето. Подробности каждой вещи модель получает из описаний карточек гардероба ниже.' }));
+    box.append(element('div', { className: 'ku-row' }, [
+      button('Сохранить', 'btn primary small', () => attempt(() => act('onSetOutfit', { entityId: id, outfit: outfit.value, keepCards: hasCards }, 'outfit-set'), 'Одежда сохранена'),
+        hasCards ? 'Сохранить строку; карточки гардероба остаются надетыми' : 'Сохранить'),
+      ...(hasCards ? [
+        button('Собрать из карточек', 'btn small', () => attempt(() => act('onWardrobeRecompose', { entityId: id }, 'outfit-recompose'), 'Строка собрана из карточек'), 'Пересобрать строку из надетых карточек'),
+        button('Переодеть словами', 'btn small', () => attempt(() => act('onSetOutfit', { entityId: id, outfit: outfit.value, keepCards: false }, 'outfit-set'), 'Карточки сняты, строка сохранена'), 'Снять карточки гардероба и оставить только эту строку'),
+      ] : []),
       element('label', { className: 'ku-inline' }, [toggle(entry.locked, 'Закрепить одежду', value => attempt(() => act('onSetOutfit', { entityId: id, locked: value }, 'outfit-lock'))), 'закрепить — летописец не меняет']),
     ]));
     if (entry.awayDays) box.append(element('p', { className: 'muted ku-small', text: `Прошло ${entry.awayDays} дн. с последней встречи: модель может переодеть персонажа, если это логично.` }));
@@ -628,6 +638,7 @@ export function createWorldPages(ctx) {
       run,
       button('Настройки', 'btn small', () => ctx.openSettingsSection?.('chronicle')),
     ]));
+    if (config.enabled && stats.untilNext) view.append(element('p', { className: 'muted ku-small', text: nextSceneText(stats) }));
     if (!config.enabled) view.append(element('div', { className: 'card' }, [
       element('p', { text: 'Хроника выключена: сводки не пишутся и не уходят модели.' }),
       button('Включить', 'btn primary small', () => attempt(() => invoke('onChronicleSettings', { changes: { enabled: true } }), 'Хроника включена')),
@@ -704,6 +715,35 @@ export function createWorldPages(ctx) {
     }
     view.append(element('p', { className: 'section-title', text: `Утечки · ${snapshot().leaks?.length ?? 0}` }));
     view.append(ctx.renderLeaks());
+    // Wardrobe descriptions of characters on stage that reach the narrator cut, or not at all.
+    const looks = looksIssues(snapshot().looksFit);
+    view.append(element('p', { className: 'section-title', text: `Одежда · ${looks.length}` }));
+    const advice = ctx.looksAdvice?.();
+    if (advice) view.append(advice);
+    else if (!looks.length) view.append(empty('Описания надетого доходят до модели целиком.'));
+    for (const issue of looks) {
+      const lost = issue.parts.filter(part => part.sent < part.total);
+      view.append(element('div', { className: 'card ku-leak-card' }, [
+        element('div', { className: 'ku-row' }, [
+          chip(issue.status === 'dropped' ? 'не дошло' : 'обрезано', 'warn'),
+          element('strong', { text: nameOf(issue.entityId) }),
+        ]),
+        element('p', { className: 'muted', text: issue.status === 'dropped'
+          ? 'Описания надетого не влезли в сцену: модель знает только, во что одет(а), без подробностей.'
+          : 'Модель получает описания надетого не целиком: всё, что дальше лимита, она не видит.' }),
+        element('ul', { className: 'ku-looks-parts' }, lost.map(part => element('li', {}, [
+          element('strong', { text: part.label }),
+          element('span', { className: 'muted', text: part.sent ? ` — доходит ${part.sent} из ${part.total} символов` : ` — не доходит совсем (${part.total} символов)` }),
+        ]))),
+        ...(issue.status === 'dropped' ? [element('p', { className: 'muted ku-small', text: ctx.needText?.(snapshot().looksFit) ?? '' })] : []),
+        element('div', { className: 'record-actions' }, [
+          issue.status === 'dropped'
+            ? button('Поднять объём сцены', 'btn primary', () => ctx.openSettingsSection?.('scene', { focus: 'Объём сцены' }))
+            : button('Поднять лимит описаний', 'btn primary', () => ctx.openSettingsSection?.('scene', { focus: 'Описание одной вещи' })),
+          button('Открыть гардероб', 'btn', () => ctx.openDossier?.(issue.entityId, 'wardrobe'), 'Посмотреть и сократить описания'),
+        ]),
+      ]));
+    }
     return view;
   }
 

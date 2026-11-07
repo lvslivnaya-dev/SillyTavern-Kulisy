@@ -1,5 +1,6 @@
 import { button, downloadJson, element, formatTime, nextControlId } from '../helpers.js';
 import { icon } from '../icons.js';
+import { nextSceneText } from '../../integration/chronicle-actions.js';
 
 /** Settings page: section menu + rows with switches; narrow panels stack the menu on top. */
 export const SETTINGS_STYLE = `
@@ -286,6 +287,9 @@ export function createSystemPages(ctx) {
         switchRow('Сцена в промпт', 'sendScene', 'Только тех, кто на сцене.', current),
         switchRow('Сообщать, если одежда не влезла', 'looksWarning', 'Всплывающее сообщение, когда описания из гардероба у кого-то на сцене перестают влезать в объём сцены: один раз, и снова — только если они влезли, а потом опять нет.', current),
         settingRow('Объём сцены, символов', numberInput('Объём сцены', current.scenePromptCharacters ?? 1500, 300, 6000, value => change({ scenePromptCharacters: value })), 'Не влезает — первыми уходят описание места и мелкие вещи.'),
+        settingRow('Описание одной вещи, символов', numberInput('Описание одной вещи', current.looksCardCharacters ?? 300, 80, 1000, value => change({ looksCardCharacters: value })), 'Сколько от описания каждой карточки гардероба уходит модели. Дальше — обрезается; что обрезано, видно в «Проверке» и в досье.'),
+        settingRow('Всё надетое на персонаже, символов', numberInput('Всё надетое', current.looksCharacterCharacters ?? 1200, 200, 4000, value => change({ looksCharacterCharacters: value })), 'Общий предел описаний одного персонажа. Больше лимит — больше нужен и объём сцены.'),
+        ...(ctx.looksAdvice?.() ? [ctx.looksAdvice()] : []),
         ...(ctx.snapshot.looksFit?.need !== undefined ? [element('p', { className: 'ku-fit dropped ku-small', text: `Описания из гардероба сейчас не влезают. ${ctx.needText?.(ctx.snapshot.looksFit) ?? ''} Примерно 1 токен на 3–4 символа русского текста.` })] : []),
         settingRow('Вещи в тень через, сообщений', numberInput('Вещи в тень через', current.itemsDormantAfter ?? 40, 0, 500, value => change({ itemsDormantAfter: value })), 'Обычная вещь, о которой столько сообщений ни слова, хранится, но не отправляется модели. Упомянут снова — вернётся. 0 — никогда.'),
       ),
@@ -330,7 +334,7 @@ export function createSystemPages(ctx) {
       segment,
       ladder,
       element('div', { className: 'set-note' }, [
-        element('span', { className: 'muted', text: `Ждут сжатия: ${stats.pending}. В промпт уходит ${tokens(ctx.snapshot.chronicleTokens)} токенов.` }),
+        element('span', { className: 'muted', text: `Ждут сжатия: ${stats.pending}. ${config.enabled ? nextSceneText(stats) : ''} В промпт уходит ${tokens(ctx.snapshot.chronicleTokens)} токенов.` }),
         run,
       ]),
       list(
@@ -340,7 +344,7 @@ export function createSystemPages(ctx) {
       ),
       list(
         settingRow('Прятать сжатые сообщения от модели', toggle('Прятать сжатые сообщения', config.hideSummarized, value => setChronicle({ hideSummarized: value })), 'Сжатые сообщения не идут модели — вместо них сводки. Сам чат не меняется.'),
-        settingRow('Последние сообщения всегда целиком', numberInput('Сколько последних сообщений не сжимать', config.keepRecent, 2, 200, value => setChronicle({ keepRecent: value }))),
+        settingRow('Последние сообщения всегда целиком', numberInput('Сколько последних сообщений не сжимать', config.keepRecent, 2, 200, value => setChronicle({ keepRecent: value })), 'Первая сводка появится, когда сообщений станет больше, чем «каждые» + это число.'),
         settingRow('Объём хроники, символов', numberInput('Объём хроники', config.maxPromptCharacters, 500, 30000, value => setChronicle({ maxPromptCharacters: value })), 'Не влезает — первыми уходят самые старые сводки.'),
       ),
     ];
@@ -378,7 +382,7 @@ export function createSystemPages(ctx) {
       case 'chronicle': body = sectionChronicle(); break;
       case 'prompt': body = sectionPrompt(); break;
       case 'models': body = [heading('Модели и API'), renderAuxApi(), renderVisionApi(), renderEmbeddings()]; break;
-      case 'data': body = [heading('Данные'), renderHoraeImport(), renderDataTransfer()]; break;
+      case 'data': body = [heading('Данные'), renderImageStorage(), renderHoraeImport(), renderDataTransfer()]; break;
       case 'diagnostics': body = [heading('Диагностика'), renderDiagnostics()]; break;
       default: body = sectionModules(current);
     }
@@ -635,6 +639,109 @@ export function createSystemPages(ctx) {
     });
     card.append(field('Чем описывать', mode), mainNote, profileBlock, customBlock, field('Максимум токенов описания', maxTokens),
       element('div', { className: 'row', style: { marginTop: '10px' } }, [save, test]));
+    return card;
+  }
+
+  /** Last answer of onImageStorageStatus: the card draws from it at once, then asks again. */
+  let imageStorageInfo = null;
+
+  /** Where pictures live: the tavern's user/images or a folder on the computer (server plugin kulisy-images). */
+  function renderImageStorage() {
+    const card = element('div', { className: 'card settings' }, [
+      element('h3', { text: 'Где хранить картинки' }),
+      element('p', { className: 'muted', style: { fontSize: '11px', marginTop: '0' }, text: 'Картинки гардероба и библиотеки. Новые картинки сохраняются туда, что выбрано здесь; уже сохранённые остаются на месте, пока их не перенести кнопкой ниже.' }),
+    ]);
+    const body = element('div', {});
+    card.append(body);
+
+    const draw = cached => {
+      body.replaceChildren();
+      if (!cached) { body.append(element('p', { className: 'muted', text: 'Проверяю плагин…' })); return; }
+      // The choice itself comes from the snapshot: it is fresher than the last plugin answer.
+      const info = { ...cached, storage: ctx.snapshot.settings?.imageStorage ?? cached.storage };
+      const plugin = info.plugin ?? { installed: false };
+      const field = (label, control, hint) => element('div', { className: 'field' }, [
+        element('label', { text: label }), control, ...(hint ? [element('p', { className: 'muted', style: { fontSize: '11px', margin: '0' }, text: hint })] : []),
+      ]);
+      const mode = element('select', { 'aria-label': 'Где хранить картинки' }, [
+        element('option', { value: 'server', text: 'На сервере таверны (user/images)', selected: info.storage !== 'folder' }),
+        element('option', { value: 'folder', text: 'В папке на компьютере', selected: info.storage === 'folder', disabled: !plugin.installed }),
+      ]);
+      mode.addEventListener('change', () => {
+        if (mode.value === 'folder' && !plugin.ready) {
+          mode.value = 'server';
+          setStatus(plugin.error || 'Сначала выберите папку.', true);
+          return;
+        }
+        act('onSettingsChange', { settings: { imageStorage: mode.value } }, 'settings-change');
+        setStatus(mode.value === 'folder' ? 'Новые картинки пойдут в папку' : 'Новые картинки пойдут на сервер таверны');
+      });
+      body.append(field('Куда сохранять новые картинки', mode));
+
+      if (!plugin.installed) {
+        body.append(element('p', { className: 'muted', style: { fontSize: '11px' }, text: 'Папка на компьютере работает через серверный плагин «kulisy-images». Чтобы его поставить: скопируйте папку server-plugin/kulisy-images из расширения в SillyTavern/plugins/, в config.yaml поставьте enableServerPlugins: true и перезапустите таверну. Подробно — в РУКОВОДСТВЕ, раздел «Картинки в папке на компьютере».' }));
+      } else {
+        const path = element('input', { type: 'text', value: plugin.folder ?? '', placeholder: 'D:\\Картинки\\Кулисы', 'aria-label': 'Папка для картинок', disabled: !plugin.admin });
+        const state = element('p', { className: 'muted', style: { fontSize: '11px', margin: '4px 0 0' }, text: plugin.ready
+          ? `Плагин${plugin.version ? ` ${plugin.version}` : ''} работает, папка доступна. Внутри неё лежат подпапки kulisy-wardrobe и kulisy-library.`
+          : `Плагин работает, но: ${plugin.error || 'папка не выбрана.'}` });
+        const save = button('Сохранить папку', 'btn primary', async () => {
+          save.disabled = true;
+          try {
+            const saved = await facade.invoke('onSetImageFolder', { folder: path.value });
+            setStatus(saved ? `Папка сохранена: ${saved}` : 'Папка забыта; картинки снова идут на сервер таверны');
+            await refresh();
+          } catch (error) { setStatus(error?.message || 'Папка не сохранилась', true); }
+          finally { save.disabled = false; }
+        });
+        const row = element('div', { className: 'row', style: { marginTop: '8px', flexWrap: 'wrap', gap: '8px' } }, [save]);
+        if (plugin.canBrowse && plugin.admin) {
+          const browse = button('Обзор…', 'btn', async () => {
+            browse.disabled = true;
+            setStatus('Окно выбора папки открыто на компьютере с таверной…');
+            try {
+              const chosen = await facade.invoke('onBrowseImageFolder', {});
+              if (chosen) { path.value = chosen; setStatus('Папка выбрана — нажмите «Сохранить папку»'); }
+              else setStatus('Выбор отменён');
+            } catch (error) { setStatus(error?.message || 'Окно выбора папки не открылось', true); }
+            finally { browse.disabled = false; }
+          });
+          row.prepend(browse);
+        }
+        body.append(field('Папка на компьютере', path, plugin.admin ? 'Полный путь. Если перенесёте папку — укажите новое место, картинки найдутся.' : 'Менять папку может только администратор SillyTavern.'), state);
+        if (plugin.admin) body.append(row);
+      }
+
+      const counts = info.counts ?? { server: 0, folder: 0 };
+      body.append(element('p', { className: 'muted', style: { fontSize: '11px', margin: '12px 0 4px' }, text: `Сейчас картинок: на сервере таверны — ${counts.server}, в папке — ${counts.folder}.` }));
+      const target = info.storage === 'folder' ? 'folder' : 'server';
+      const elsewhere = target === 'folder' ? counts.server : counts.folder;
+      if (elsewhere > 0 && (target === 'server' || plugin.ready)) {
+        const move = button(target === 'folder' ? `Перенести в папку (${elsewhere})` : `Перенести на сервер таверны (${elsewhere})`, 'btn', async () => {
+          move.disabled = true;
+          setStatus('Переношу картинки…');
+          try {
+            const result = await facade.invoke('onMoveImages', { to: target });
+            const notes = [`перенесено: ${result.moved}`];
+            if (result.failed) notes.push(`не вышло: ${result.failed} (см. Диагностику)`);
+            if (result.leftovers) notes.push(`старых копий не удалилось: ${result.leftovers}`);
+            setStatus(`Готово — ${notes.join(', ')}`, Boolean(result.failed));
+            await refresh();
+          } catch (error) { setStatus(error?.message || 'Картинки не перенеслись', true); }
+          finally { move.disabled = false; }
+        });
+        body.append(element('div', { className: 'row' }, [move]));
+      }
+    };
+
+    async function refresh() {
+      try { imageStorageInfo = await facade.invoke('onImageStorageStatus', {}); }
+      catch (error) { imageStorageInfo = { storage: 'server', plugin: { installed: false }, counts: { server: 0, folder: 0 } }; setStatus(error?.message || 'Не удалось проверить плагин', true); }
+      draw(imageStorageInfo);
+    }
+
+    draw(imageStorageInfo);
+    refresh().catch(() => {});
     return card;
   }
 

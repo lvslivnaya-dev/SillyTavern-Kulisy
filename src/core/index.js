@@ -35,5 +35,5 @@ export {
 export { KNOWLEDGE_PROMPT_DEFAULTS, KNOWLEDGE_RULES, buildKnowledgePrompt, selectKnowledgeLines } from './knowledge-prompt.js';
 export {
   WARDROBE_CATEGORIES, WARDROBE_GENDERS, WARDROBE_LIMITS, WARDROBE_SHELVES, WARDROBE_VERSION, addCard, addLook, addToWorn, cardLabel, cardsOf, cleanImagePath,
-  composeOutfit, emptyWardrobe, normalizeWardrobe, removeCard, removeLook, searchCards, updateCard, updateLook, wornCards, wornLabel,
+  composeOutfit, outfitLabel, emptyWardrobe, normalizeWardrobe, removeCard, removeLook, searchCards, updateCard, updateLook, wornCards, wornLabel,
 } from './wardrobe.js';

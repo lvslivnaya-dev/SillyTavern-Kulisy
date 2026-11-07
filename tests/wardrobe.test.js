@@ -133,3 +133,31 @@ test('describing: «как у таверны» sends the picture to the chat mod
   assert.equal(parseDescription('Просто чёрная кожанка.').description, 'Просто чёрная кожанка.');
   assert.equal(parseDescription('{"category":"nope","description":"x"}').category, '');
 });
+
+test('a hairstyle card is described without the hair colour; other sections keep colours', async () => {
+  const { describePrompt } = await import('../src/integration/vision.js');
+  const hair = describePrompt('hair');
+  assert.match(hair, /NEVER name the colour of the hair itself/);
+  assert.match(hair, /never the hair colour/);
+  assert.doesNotMatch(hair, /what it is, colour, material/);
+  const top = describePrompt('top');
+  assert.match(top, /what it is, colour, material/);
+  assert.doesNotMatch(top, /hair colour/);
+});
+
+test('a thinking model: the reasoning is dropped, the last JSON answer is taken', () => {
+  const reasoning = '**My Approach**\n\nOkay, the JSON structure is: `{"name":"...", "gender":"...", "description":"..."}`\n\nNow the answer:\n';
+  const answer = parseDescription(`${reasoning}\`\`\`json\n{\n "name": "Худи",\n "gender": "unisex",\n "description": "Бордовое худи."\n}\n\`\`\``);
+  assert.deepEqual([answer.name, answer.gender, answer.description], ['Худи', 'unisex', 'Бордовое худи.']);
+  const think = parseDescription('<think>let me look {at it}</think>{"name":"Кеды","description":"Белые кеды."}');
+  assert.equal(think.description, 'Белые кеды.');
+  // A proxy that broke lines inside keys and values.
+  const broken = parseDescription('{"name\n":"Костюм","gender":"female","description\n":"Бежевый костюм с\n принтом."}');
+  assert.deepEqual([broken.name, broken.description], ['Костюм', 'Бежевый костюм с  принтом.']);
+  // Reasoning cut by the token limit: an error, never the reasoning as a description.
+  assert.throws(() => parseDescription('**Thinking**\nThe JSON is `{"name":"..."` and then {"name":"Ху'), /размышления/);
+});
+
+test('the JSON template quoted in the reasoning ("...") is not taken as the answer', () => {
+  assert.throws(() => parseDescription('The JSON: `{"name":"...", "gender":"...", "description":"..."}`. Now: {"name":"Ху'), /размышления/);
+});

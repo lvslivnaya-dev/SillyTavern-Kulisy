@@ -226,9 +226,23 @@ export function parseModelObject(raw) {
     }
     if (char === '"') quoted = true;
     else if (char === '{') depth += 1;
-    else if (char === '}' && --depth === 0) return JSON.parse(text.slice(start, index + 1));
+    else if (char === '}' && --depth === 0) return parseLenient(text.slice(start, index + 1));
   }
   throw new SyntaxError('Ответ модели оборван или не содержит завершённый JSON-объект.');
+}
+
+// A list the model wrote as a bare word: ["a", all], [all 9], [everyone]. Read as "not given",
+// so the default applies (knownBy → the participants, witnessIds → who is present).
+const BARE_ALL_LIST = /\[\s*(?:"[^"\\]*"\s*,\s*)*(?:all|everyone|everybody|все)(?![\p{L}\d_])[^\]"]*\]/giu;
+
+/** JSON.parse; if that fails, once more with bare-word lists read as null. */
+function parseLenient(json) {
+  try { return JSON.parse(json); }
+  catch (error) {
+    const repaired = json.replace(BARE_ALL_LIST, 'null');
+    if (repaired === json) throw error;
+    return JSON.parse(repaired);
+  }
 }
 
 /** Session-wide token usage of quiet analyzer requests (prompt + response estimate). */
@@ -273,7 +287,11 @@ export async function requestStructured(context, options, parser) {
     trackUsage(context, { prompt: retryPrompt }, retry);
     try { return parser(retry); }
     catch (error) {
-      throw new Error(`Модель дважды вернула некорректные данные. Отношения не сохранены. Попробуйте другую модель или повторите анализ. Детали: ${error.message}`, { cause: firstError });
+      // A cut-off answer is almost always the token limit: say where to raise it.
+      const cut = /оборван/.test(error.message)
+        ? ' Скорее всего, модели не хватило токенов на ответ: поднимите «Максимум токенов ответа» в «Модели и API → Вспомогательный API» (например, до 8000).'
+        : '';
+      throw new Error(`Модель дважды вернула некорректные данные. Отношения не сохранены. Попробуйте другую модель или повторите анализ. Детали: ${error.message}${cut}`, { cause: firstError });
     }
   }
 }
@@ -359,4 +377,4 @@ EVIDENCE RULE: return an operation only when this scene directly shows something
 CALIBRATION: 1..3 for ordinary moments, 4..8 for important events, larger only for decisive events. Set confidence below ${MIN_CONFIDENCE} when you are guessing — such operations are discarded. Never invent characters or apply reciprocal changes automatically.`;
 }
 
-const COLLECTION_INSTRUCTIONS = ` When the scene gives evidence for several dimensions (friendship, trust, respect, approval…), report each of them, not only affection — but never add a dimension the scene does not evidence. A friendship trio has up to six directed links; evaluate observed interactions among all participants including the user persona, never manufacture reciprocity. Do not add attraction unless supported. Also return top-level arrays "memories" and "tensions". Each item: {"participantIds":["a","b"],"knownBy":["a","b"],"text":"short Russian description","intensity":3}. Participants may be one person, a pair, a company of 3+, or [] for a genuinely chat-wide event. knownBy lists ONLY characters who witnessed the event or were explicitly told about it; omit characters who merely could have heard about it. If the scene shows a secret being shared, include only those present. Use registered IDs only. Do not duplicate one company event into multiple pairs. Memories are significant observed events; tensions are unresolved worries/conflicts/desires supported by the scene. At most 4 items per array, no duplicates of existing records. Empty arrays are correct when no significant evidence exists. Lore describes background/personality, not events that happened in this chat. Never turn a hypothetical lore description into a memory.`;
+const COLLECTION_INSTRUCTIONS = ` When the scene gives evidence for several dimensions (friendship, trust, respect, approval…), report each of them, not only affection — but never add a dimension the scene does not evidence. A friendship trio has up to six directed links; evaluate observed interactions among all participants including the user persona, never manufacture reciprocity. Do not add attraction unless supported. Also return top-level arrays "memories" and "tensions". Each item: {"participantIds":["a","b"],"knownBy":["a","b"],"text":"short Russian description","intensity":3}. Participants may be one person, a pair, a company of 3+, or [] for a genuinely chat-wide event. knownBy is always an array of quoted registered IDs, never a word like all. knownBy lists ONLY characters who witnessed the event or were explicitly told about it; omit characters who merely could have heard about it. If the scene shows a secret being shared, include only those present. Use registered IDs only. Do not duplicate one company event into multiple pairs. Memories are significant observed events; tensions are unresolved worries/conflicts/desires supported by the scene. At most 4 items per array, no duplicates of existing records. Empty arrays are correct when no significant evidence exists. Lore describes background/personality, not events that happened in this chat. Never turn a hypothetical lore description into a memory.`;

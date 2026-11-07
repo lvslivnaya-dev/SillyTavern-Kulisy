@@ -70,9 +70,11 @@ export function createWorldCallbacks(deps) {
     },
 
     // ---- Outfits and conditions -----------------------------------------
-    onSetOutfit: ({ entityId, outfit, locked }) => {
+    onSetOutfit: ({ entityId, outfit, locked, keepCards = false }) => {
       requireCharacter(entityId);
-      return run('wardrobe.set', { entityId, ...(outfit != null ? { outfit } : {}), ...(locked != null ? { locked: Boolean(locked) } : {}) },
+      // Words alone mean "changed into something else" (the cards come off); keepCards keeps them on.
+      const cardIds = keepCards ? getState().world?.wardrobe?.[entityId]?.cardIds : undefined;
+      return run('wardrobe.set', { entityId, ...(outfit != null ? { outfit } : {}), ...(cardIds?.length ? { cardIds } : {}), ...(locked != null ? { locked: Boolean(locked) } : {}) },
         outfit != null ? `Одежда ${nameOf(entityId)}: ${String(outfit).slice(0, 80)}` : `${locked ? 'Закреплено' : 'Откреплено'}: одежда ${nameOf(entityId)}`);
     },
     onAddCondition: ({ entityId, text, days }) => {

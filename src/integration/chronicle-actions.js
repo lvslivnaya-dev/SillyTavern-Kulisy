@@ -10,7 +10,23 @@ import {
 } from './chronicle-run.js';
 import { withBusy } from './busy.js';
 
-const SETTING_KEYS = ['enabled', 'preset', 'sceneEvery', 'chapterOf', 'arcOf', 'keepRecent', 'hideSummarized', 'maxPromptCharacters'];
+/**
+ * Messages waiting, and how many more replies until the next scene: a scene takes
+ * `sceneEvery` messages, and the newest `keepRecent` are never summarized — so the
+ * first scene comes only after sceneEvery + keepRecent messages.
+ */
+export function waiting(pending, config) {
+  return { pending, untilNext: Math.max(0, config.sceneEvery - pending), keepRecent: config.keepRecent, sceneEvery: config.sceneEvery };
+}
+
+/** «Следующая сводка — …» for the pages. */
+export function nextSceneText(stats) {
+  if (!stats?.sceneEvery) return '';
+  if (!stats.untilNext) return 'Сводка сцены готова к записи.';
+  return `Следующая сводка — через ${stats.untilNext} сообщ.: сжимается по ${stats.sceneEvery}, а последние ${stats.keepRecent} всегда идут модели целиком и не сжимаются.`;
+}
+
+const SETTING_KEYS =['enabled', 'preset', 'sceneEvery', 'chapterOf', 'arcOf', 'keepRecent', 'hideSummarized', 'maxPromptCharacters'];
 
 /**
  * deps: { settings(), saveSettings(), chronicle(), save(next), chat(), saveChat(), context() (routed for
@@ -78,7 +94,7 @@ export function createChronicleRunner(deps) {
         config,
         presets: CHRONICLE_PRESETS,
         chronicle: deps.chronicle(),
-        stats: { ...chronicleStats(deps.chronicle(), deps.chat()?.length ?? 0), pending: pendingCount(deps.chat(), config) },
+        stats: { ...chronicleStats(deps.chronicle(), deps.chat()?.length ?? 0), ...waiting(pendingCount(deps.chat(), config), config) },
         running: Boolean(running),
       };
     },

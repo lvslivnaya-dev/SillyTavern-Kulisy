@@ -1,6 +1,6 @@
 {
   "name": "sillytavern-kulisy",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
   "type": "module",
   "description": "Narrator-card companion for SillyTavern: relationships plus who knows what, who is on stage and who has met whom.",

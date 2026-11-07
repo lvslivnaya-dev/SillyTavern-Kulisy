@@ -1,0 +1,9 @@
+{
+  "name": "kulisy-images",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "main": "index.mjs",
+  "description": "SillyTavern server plugin for «Кулисы»: keeps pictures in a folder on this computer.",
+  "license": "MIT"
+}

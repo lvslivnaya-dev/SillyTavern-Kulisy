@@ -61,5 +61,5 @@ test('host block sets tokens, the theme font and the theme text colour', () => {
   assert.match(css, /^:host\{all:initial;/);
   assert.match(css, /font-family:var\(--k-font\)/);
   assert.match(css, /color:var\(--k-text\)/);
-  assert.match(css, /--x:var\(--k-bg\)\}$/);
+  assert.match(css, /--x:var\(--k-bg\)\}:host\(\[hidden\]\)/);
 });

@@ -2,7 +2,7 @@ import { button, characterId, characterName, element } from '../helpers.js';
 import { icon } from '../icons.js';
 import { WARDROBE_CATEGORIES, WARDROBE_GENDERS, WARDROBE_SHELVES, cardLabel, cardsOf, composeOutfit, searchCards } from '../../core/index.js';
 import { fileToDataUrl, imageUrl } from '../../integration/wardrobe-images.js';
-import { LOOKS_LIMITS } from '../../integration/world-prompt.js';
+import { normalizeLooksLimits } from '../../integration/world-prompt.js';
 
 /**
  * «Гардероб»: a gallery of pictures (descriptions open on click, in a card over the
@@ -35,6 +35,8 @@ export function createWardrobePages(ctx) {
   let openId = '';
   let askReplace = false;
   let describeOnUpload = false;
+  let redescribing = false;
+  let importing = false;
   // What was typed into the open card: kept through any redraw until saved or closed.
   let draft = null; // { cardId, fields }
   let focusedId = ''; // the card whose name got the focus when it opened (only then, not on every redraw)
@@ -59,6 +61,9 @@ export function createWardrobePages(ctx) {
     return characters().map(characterId).filter(id => (forShelf === 'persona' ? id === persona : id !== persona));
   }
 
+  /** Description limits as set in «Настройки → Знания и сцена». */
+  const limits = () => normalizeLooksLimits({ card: snapshot().settings?.looksCardCharacters, character: snapshot().settings?.looksCharacterCharacters });
+
   /** «Нужно ~2300 (сейчас 1500)»: how far to raise the scene volume. */
   function needText(fit) {
     const now = Number(snapshot().settings?.scenePromptCharacters) || 1500;
@@ -76,7 +81,7 @@ export function createWardrobePages(ctx) {
     if (!status) return null;
     const text = {
       full: 'описания надетого уходят модели целиком.',
-      cut: `модель получает начало описаний: до ${LOOKS_LIMITS.card} символов на вещь и ${LOOKS_LIMITS.character} на всё надетое. Главное пишите в начале.`,
+      cut: `модель получает начало описаний: до ${limits().card} символов на вещь и ${limits().character} на всё надетое. Главное пишите в начале.`,
       dropped: 'описания не влезли в сцену: модель знает только, во что одет(а), без подробностей.',
       offstage: 'не на сцене — сейчас модель описаний не получает.',
     }[status];
@@ -131,6 +136,41 @@ export function createWardrobePages(ctx) {
     render();
   }
 
+  /** Pictures dropped into the folder «Гардероб» become cards (onWardrobeImportInbox). */
+  function importInbox() {
+    if (importing) return;
+    importing = true;
+    render();
+    attempt(async () => {
+      await ctx.facade.invoke('onWardrobeInboxRefresh', {});
+      return act('onWardrobeImportInbox', {
+        describe: describeOnUpload,
+        onProgress: (done, total, stage) => setStatus(stage === 'describe' ? `Описываю картинки из папки: ${done} из ${total}…` : `Делаю карточки из папки: ${done} из ${total}…`),
+      }, 'wardrobe-import-inbox');
+    }, result => {
+      if (!result) return '';
+      const notes = [`новых карточек: ${result.added}`];
+      if (result.described) notes.push(`описано: ${result.described}`);
+      if (result.failed) notes.push(`не вышло: ${result.failed}`);
+      if (result.undescribed) notes.push(`не описалось: ${result.undescribed} (опишите в карточке или «Переписать описания»)`);
+      if (result.skipped.length) notes.push(`пропущено (непонятная папка): ${result.skipped.length} — ${result.skipped[0].problem}`);
+      return `Из папки: ${notes.join(', ')}`;
+    }).finally(() => { importing = false; render(); });
+  }
+
+  function renderInboxBanner() {
+    const inbox = snapshot().inbox;
+    if (!inbox?.available || !inbox.count) return null;
+    const take = button(importing ? 'Забираю…' : 'Забрать', 'btn primary small', importInbox, 'Сделать карточки из картинок папки «Гардероб»');
+    take.disabled = importing;
+    return element('div', { className: 'ku-row ku-inbox' }, [
+      icon('download'),
+      element('span', { text: `В папке «Гардероб» новых картинок: ${inbox.count}. Раздел, пол и полку карточки получат по папке, в которой лежит картинка; сами картинки останутся на месте.${describeOnUpload ? ' Модель сразу их опишет.' : ''}` }),
+      element('span', { className: 'ku-push' }),
+      take,
+    ]);
+  }
+
   function visibleCards() {
     const all = query.trim() ? searchCards(wardrobe(), query, { shelf }) : cardsOf(wardrobe(), { shelf, gender });
     return section && !query.trim() ? all.filter(card => card.category === section) : all;
@@ -178,7 +218,10 @@ export function createWardrobePages(ctx) {
         openId = card?.id ?? '';
       })),
       element('label', { className: 'ku-inline ku-small', title: 'Сразу просить модель описать новые картинки (тратит запрос на каждую)' }, [auto, 'описывать сразу']),
+      ...(snapshot().inbox?.available ? [button(importing ? 'Забираю…' : 'Из папки', 'btn small', importInbox, 'Забрать картинки, которые вы положили в папку «Гардероб» на компьютере')] : []),
     ]));
+    const banner = renderInboxBanner();
+    if (banner) view.append(banner);
 
     const body = element('div', { className: 'ku-wbody' });
     const sections = element('nav', { className: 'ku-wsec', 'aria-label': 'Подразделы' });
@@ -207,7 +250,21 @@ export function createWardrobePages(ctx) {
       })));
     }
     const list = visibleCards();
-    gallery.append(element('p', { className: 'section-title', text: `${query.trim() ? 'Найдено' : (section ? SECTION[section] : 'Всё')} · ${list.length}` }));
+    const title = element('p', { className: 'section-title', text: `${query.trim() ? 'Найдено' : (section ? SECTION[section] : 'Всё')} · ${list.length}` });
+    if (!composing && list.some(card => card.image)) {
+      // Every card shown here, described again from its picture: the description only.
+      const redo = button(redescribing ? 'Переписываю…' : 'Переписать описания', 'btn small', () => {
+        redescribing = true;
+        attempt(() => act('onWardrobeRedescribe', {
+          cardIds: list.map(card => card.id),
+          onProgress: (done, total) => setStatus(`Переписываю описания: ${done} из ${total}…`),
+        }, 'wardrobe-redescribe'), result => (result
+          ? `Описания переписаны: ${result.done}${result.failed ? `, не вышло: ${result.failed}` : ''}${result.skipped ? `, без картинки пропущено: ${result.skipped}` : ''}`
+          : '')).finally(() => { redescribing = false; render(); });
+      }, 'Модель заново опишет по картинкам все карточки, которые сейчас видны. Меняется только описание.');
+      redo.disabled = redescribing;
+      gallery.append(element('div', { className: 'ku-row' }, [title, element('span', { className: 'ku-push' }), redo]));
+    } else gallery.append(title);
     if (composing) gallery.append(element('p', { className: 'muted ku-small', text: 'Отметьте всё, что войдёт в образ, из любых подразделов. Карточки складываются, а не заменяют друг друга.' }));
     const grid = element('div', { className: 'ku-tiles' }, list.map(tile));
     const drop = filePicker('Перетащите картинки сюда или нажмите', { className: 'ku-tile ku-drop', onFiles: files => addPictures(files) });
@@ -272,10 +329,10 @@ export function createWardrobePages(ctx) {
     const counter = element('p', { className: 'ku-count muted ku-small', 'aria-live': 'polite' });
     const count = () => {
       const length = description.value.replace(/\s+/g, ' ').trim().length;
-      counter.textContent = length > LOOKS_LIMITS.card
-        ? `${length} символов · модель получит первые ${LOOKS_LIMITS.card} — главное пишите в начале`
-        : `${length} из ${LOOKS_LIMITS.card} символов, которые уходят модели`;
-      counter.classList.toggle('over', length > LOOKS_LIMITS.card);
+      counter.textContent = length > limits().card
+        ? `${length} символов · модель получит первые ${limits().card} — главное пишите в начале`
+        : `${length} из ${limits().card} символов, которые уходят модели`;
+      counter.classList.toggle('over', length > limits().card);
     };
     description.addEventListener('input', count);
     count();
@@ -407,6 +464,57 @@ export function createWardrobePages(ctx) {
   document.addEventListener('paste', onPaste);
 
   /** The worn cards of one character, for the dossier: pictures with «снять». */
+  /** How much of this card's description reaches the narrator, when not all of it. */
+  function deliveryNote(entityId, cardId) {
+    const part = (snapshot().looksFit?.parts?.[entityId] ?? []).find(item => item.cardId === cardId);
+    if (!part || part.sent >= part.total) return null;
+    return element('span', { className: 'ku-small ku-delivery', text: part.sent ? `модели доходит ${part.sent} из ${part.total} символов` : 'описание до модели не доходит' });
+  }
+
+  /**
+   * One box for the "Проверка" page and the settings: whether every description of the
+   * characters on stage reaches the narrator whole, and if not, the exact values that
+   * would do it, with a button that sets them.
+   */
+  function looksAdvice() {
+    const fit = snapshot().looksFit ?? {};
+    if (fit.off) return null;
+    const onStage = Object.entries(fit).filter(([key, status]) => key !== 'parts' && key !== 'need' && key !== 'needLooks' && status !== 'offstage');
+    if (!onStage.length) return null;
+    const need = fit.needLooks;
+    if (!need) {
+      return element('div', { className: 'ku-fit full ku-row' }, [icon('check'), element('span', { className: 'ku-small', text: 'Сейчас описания надетого у всех на сцене доходят до модели целиком.' })]);
+    }
+    const now = limits();
+    const scene = Number(snapshot().settings?.scenePromptCharacters) || 1500;
+    const patch = {};
+    if (need.card > now.card) patch.looksCardCharacters = need.card;
+    if (need.character > now.character) patch.looksCharacterCharacters = need.character;
+    if (need.scene && need.scene > scene) patch.scenePromptCharacters = need.scene;
+    const steps = [
+      need.card > now.card ? `«Описание одной вещи» — ${need.card} (сейчас ${now.card})` : '',
+      need.character > now.character ? `«Всё надетое» — ${need.character} (сейчас ${now.character})` : '',
+      need.scene && need.scene > scene ? `«Объём сцены» — ${need.scene} (сейчас ${scene})` : '',
+    ].filter(Boolean);
+    const box = element('div', { className: 'ku-fit dropped ku-looks-advice' });
+    box.append(element('p', { className: 'ku-small', text: steps.length
+      ? `Чтобы всё дошло целиком, нужно: ${steps.join(', ')}.`
+      : 'Значений больше не поднять: дело в длине самих описаний.' }));
+    for (const item of need.tooLong ?? []) {
+      box.append(element('p', { className: 'ku-small', text: `«${item.label}» у ${nameOf(item.entityId)} — ${item.total} символов, а на одну вещь можно не больше 1000: целиком не уйдёт, сократите описание.` }));
+    }
+    for (const id of need.overCharacter ?? []) {
+      box.append(element('p', { className: 'ku-small', text: `У ${nameOf(id)} все описания вместе больше 4000 символов: целиком не уйдут, сократите или снимите лишнее.` }));
+    }
+    if (!need.scene) box.append(element('p', { className: 'ku-small', text: 'Даже с объёмом сцены 6000 описания не влезут: сократите их или уберите кого-то со сцены.' }));
+    if (Object.keys(patch).length) {
+      box.append(button('Поставить нужные значения', 'btn primary small', () => attempt(() => act('onSettingsChange', { settings: patch }, 'settings-change'), 'Лимиты подняты'),
+        'Записать эти значения в «Настройки → Знания и сцена»'));
+    }
+    box.append(element('p', { className: 'muted ku-small', text: 'Когда всё доходит, здесь появится зелёная строка, а в «Проверке» будет «Одежда · 0».' }));
+    return box;
+  }
+
   function renderWornCards(id) {
     const entry = worn()[id];
     const cards = (entry?.cardIds ?? []).map(cardId => wardrobe().cards.find(card => card.id === cardId)).filter(Boolean);
@@ -416,7 +524,7 @@ export function createWardrobePages(ctx) {
     for (const card of cards) {
       box.append(element('div', { className: 'ku-part' }, [
         card.image ? element('img', { src: imageUrl(card.image), alt: '' }) : element('span', { className: 'ku-part-blank', 'aria-hidden': 'true' }),
-        element('span', { className: 'ku-part-text' }, [element('strong', { text: cardLabel(card) }), element('span', { className: 'muted ku-small', text: SECTION[card.category] })]),
+        element('span', { className: 'ku-part-text' }, [element('strong', { text: cardLabel(card) }), element('span', { className: 'muted ku-small', text: SECTION[card.category] }), deliveryNote(id, card.id)].filter(Boolean)),
         Object.assign(element('button', { type: 'button', className: 'ku-ib', 'aria-label': `Снять: ${cardLabel(card)}`, title: 'Снять' }, [icon('close')]), { onclick: () => attempt(() => act('onTakeOff', { entityId: id, cardId: card.id }, 'wardrobe-take-off')) }),
       ]));
     }
@@ -428,13 +536,19 @@ export function createWardrobePages(ctx) {
     return box;
   }
 
-  return { needText, renderWardrobe, renderWornCards, destroyWardrobe: () => document.removeEventListener('paste', onPaste) };
+  return { needText, looksAdvice, renderWardrobe, renderWornCards, destroyWardrobe: () => document.removeEventListener('paste', onPaste) };
 }
 
 /** Styles of the wardrobe; colours only from the theme tokens. */
 export const WARDROBE_STYLE = `
 .ku-wardrobe{display:flex;flex-direction:column;gap:12px;container-type:inline-size}
+.ku-delivery{color:var(--k-warn);display:block}
+.ku-looks-advice{display:grid;gap:6px}
+.ku-looks-advice p{margin:0}
+.ku-looks-parts{margin:4px 0 8px;padding-left:18px;display:grid;gap:3px}
 .ku-wtools{gap:8px}
+.ku-inbox{gap:10px;margin:8px 0;padding:10px 12px;border-radius:12px;border:1px solid color-mix(in srgb,var(--k-accent) 45%,var(--k-line));background:color-mix(in srgb,var(--k-accent) 9%,var(--k-panel));font-size:13px}
+.ku-inbox>span:not(.ku-push){flex:1 1 220px;min-width:0}
 .ku-seg{display:inline-flex;padding:3px;border-radius:11px;background:var(--k-inset);border:1px solid var(--k-line);gap:2px}
 .ku-seg button{min-height:30px;padding:0 12px;border-radius:8px;border:0;background:transparent;color:var(--k-muted);font:inherit;font-size:13px;font-weight:700;cursor:pointer}
 .ku-seg button.on{background:var(--k-panel);color:var(--k-text);box-shadow:0 1px 3px var(--k-shadow)}

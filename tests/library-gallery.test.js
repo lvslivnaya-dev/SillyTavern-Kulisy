@@ -193,7 +193,9 @@ test('scene: whether worn descriptions reach the narrator — whole, only the st
     createOperation('wardrobe.set', { entityId: hina.id, outfit: 'худи', cardIds: [short.card.id] }),
     createOperation('wardrobe.set', { entityId: ran.id, outfit: 'пальто', cardIds: [long.card.id] }),
   ]);
-  assert.deepEqual(looksFit(state, { wardrobe }), { [hina.id]: 'full', [ran.id]: 'offstage' });
+  const { parts, ...statuses } = looksFit(state, { wardrobe });
+  assert.deepEqual(statuses, { [hina.id]: 'full', [ran.id]: 'offstage' });
+  assert.ok(parts[hina.id].every(part => part.sent === part.total), 'per card: the whole description is sent');
   const both = applyOperations(state, [createOperation('scene.set', { presentIds: [hina.id, ran.id] })]);
   assert.equal(looksFit(both, { wardrobe })[ran.id], 'cut');
   const tight = applyOperations(both, [createOperation('wardrobe.set', { entityId: hina.id, outfit: 'очень длинная строка одежды '.repeat(10), cardIds: [short.card.id] })]);
@@ -216,7 +218,7 @@ test('«Поднять объём сцены» opens «Знания и сцен�
   const shadow = studio.element.shadowRoot;
   try {
     shadow.querySelector('.ku-tile:not(.ku-drop)').click();
-    assert.match(shadow.querySelector('.ku-count').textContent, /из 180/);
+    assert.match(shadow.querySelector('.ku-count').textContent, /из 300/, 'the default per-card limit');
     assert.match(shadow.querySelector('.ku-fit.dropped').textContent, /не влезли/);
     [...shadow.querySelectorAll('button')].find(node => node.textContent === 'Поднять объём сцены').click();
     await new Promise(resolve => setTimeout(resolve, 0));
@@ -290,4 +292,50 @@ test('tattoos: «Где находится» goes into the prompt for the pictur
   const added = await callbacks.onWardrobeAddCard({ category: 'tattoos', placement: 'левое предплечье', imageDataUrl: 'data:image/png;base64,AAAA' });
   await callbacks.onWardrobeDescribe({ cardId: added.id });
   assert.match(asked[0], /левое предплечье/);
+});
+
+test('a hidden shadow host stays hidden: :host{all:initial} must not beat [hidden]', async () => {
+  const { hostThemeCss } = await import('../src/ui/theme.js');
+  assert.match(hostThemeCss(), /:host\(\[hidden\]\)\{display:none!important\}/);
+});
+
+test('a bare "all" list in the model JSON reads as not given', async () => {
+  const { parseModelObject } = await import('../src/integration/analyzer.js');
+  assert.deepEqual(parseModelObject('{"memories":[{"knownBy":[all],"text":"a"},{"knownBy":[all 9],"text":"b"},{"knownBy":["x", all],"text":"c"}],"operations":[]}'),
+    { memories: [{ knownBy: null, text: 'a' }, { knownBy: null, text: 'b' }, { knownBy: null, text: 'c' }], operations: [] });
+  assert.deepEqual(parseModelObject('{"text":"[all] в тексте не трогаем"}'), { text: '[all] в тексте не трогаем' });
+  assert.throws(() => parseModelObject('{"a":[1,}'));
+});
+
+test('chronicle: how many messages until the next scene, and wardrobe prompts ask for catalogue style', async () => {
+  const { waiting, nextSceneText } = await import('../src/integration/chronicle-actions.js');
+  const stats = waiting(9, { sceneEvery: 15, keepRecent: 20 });
+  assert.equal(stats.untilNext, 6);
+  assert.match(nextSceneText(stats), /через 6 сообщ\..*по 15.*последние 20/);
+  assert.equal(waiting(15, { sceneEvery: 15, keepRecent: 20 }).untilNext, 0);
+  const { describePrompt } = await import('../src/integration/vision.js');
+  for (const prompt of [describePrompt('top'), describePrompt(null)]) assert.match(prompt, /shop catalogue[\s\S]*No metaphors[\s\S]*at most 300 characters/);
+});
+
+test('«Переписать описания»: every card with a picture gets a new description, nothing else changes', async () => {
+  const settings = {};
+  const store = createWardrobeStore({ settings: () => settings, save: () => {} });
+  const callbacks = createWardrobeCallbacks({
+    store, getState: () => createDefaultState(), commitOperations: async () => {}, confirm: async () => true,
+    upload: async (dataUrl, name) => `/user/images/kulisy-wardrobe/${name}.png`, removeImage: async () => {}, imageForModel: async () => 'data:image/png;base64,AAAA',
+    ask: async () => '{"name":"Другое имя","category":"bottom","gender":"male","description":"Белая хлопковая рубашка."}',
+  });
+  const a = await callbacks.onWardrobeAddCard({ name: 'Моя рубашка', category: 'top', gender: 'female', description: 'Старое.', imageDataUrl: 'data:image/png;base64,AAAA' });
+  const b = await callbacks.onWardrobeAddCard({ name: 'Без картинки', category: 'top', description: 'Как было.' });
+  const progress = [];
+  const result = await callbacks.onWardrobeRedescribe({ cardIds: [a.id, b.id], onProgress: (done, total) => progress.push(`${done}/${total}`) });
+  assert.deepEqual(result, { done: 1, failed: 0, skipped: 1 });
+  assert.deepEqual(progress, ['1/1']);
+  const cards = store.get().cards;
+  const first = cards.find(card => card.id === a.id);
+  assert.equal(first.description, 'Белая хлопковая рубашка.');
+  assert.equal(first.name, 'Моя рубашка');
+  assert.equal(first.category, 'top');
+  assert.equal(first.gender, 'female');
+  assert.equal(cards.find(card => card.id === b.id).description, 'Как было.');
 });
