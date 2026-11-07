@@ -24,8 +24,13 @@ import {
   updateHeadcanons,
   selectRuntimePrompt,
   buildKnowledgePrompt,
+  cleanSecretText,
+  loreSecretEvent,
+  secretEntriesOf,
+  stripSecretEntries,
   presentIds,
   howKnows,
+  isDead,
   dossier,
   pairKey,
   uniqueId,
@@ -70,8 +75,9 @@ import { normalizeLayout, reopenOnLoad } from './src/ui/layout.js';
 import { mountMessageButtons } from './src/integration/message-buttons.js';
 import { mountChatOverlay } from './src/integration/chat-overlay.js';
 import { scanAcquaintances } from './src/integration/acquaintance-scan.js';
+import { scanLoreSecrets } from './src/integration/secret-scan.js';
 import { mentionScorer, mentionedEntities, recentSceneText, semanticScorer } from './src/integration/headcanon-retrieval.js';
-import { LOCAL_MODELS, cosine, embedTexts } from './src/integration/embeddings.js';
+import { DEFAULT_LOCAL_MODEL, LOCAL_MODELS, cosine, embedTexts } from './src/integration/embeddings.js';
 import { createChatStorage } from './src/integration/storage.js';
 import { createLibraryCallbacks, createLocationLibraryStore, syncChat } from './src/integration/location-library-actions.js';
 import { createRelationshipStudio } from './src/ui/studio.js';
@@ -91,8 +97,9 @@ let controller = null;
 function normalizeEmbeddings(config) {
   return {
     mode: ['off', 'local', 'api'].includes(config?.mode) ? config.mode : 'off',
-    localModel: String(config?.localModel || 'Xenova/multilingual-e5-small'),
-    dtype: config?.dtype === 'q4' ? 'q4' : 'q8',
+    localModel: LOCAL_MODELS[config?.localModel] ? config.localModel : DEFAULT_LOCAL_MODEL,
+    // q4 is gone: its files were bigger than q8, so old "q4" settings become q8.
+    dtype: 'q8',
     format: config?.format === 'gemini' ? 'gemini' : 'openai',
     url: String(config?.url ?? '').trim().slice(0, 500),
     key: String(config?.key ?? '').trim().slice(0, 500),
@@ -669,6 +676,81 @@ export async function init() {
     return loadGroupLore(ctx, state, ids, { books: generationBooks(ctx, state, cardWorldNames()), matchKeys: matchingKeys });
   }
 
+  /** The persona's own lorebook (Persona Management → lorebook), or ''. */
+  function personaBookName() {
+    const ctx = SillyTavern.getContext();
+    const name = ctx.powerUserSettings?.persona_description_lorebook;
+    return name && (ctx.getWorldInfoNames?.() ?? []).includes(name) ? name : '';
+  }
+
+  /** Books a secret may come from: the chat's books plus the persona's. */
+  function secretBooks() {
+    const ctx = SillyTavern.getContext();
+    const persona = personaBookName();
+    return [...new Set([...generationBooks(ctx, state, cardWorldNames()), ...(persona ? [persona] : [])])];
+  }
+
+  /** Secret entries of the chat's books: { fresh: not in the journal yet, changed: [{ event, entry }] }. */
+  async function loreSecrets(books = secretBooks()) {
+    const ctx = SillyTavern.getContext();
+    const fresh = [];
+    const changed = [];
+    for (const name of books) {
+      let book;
+      try { book = await ctx.loadWorldInfo(name); }
+      catch (error) { console.warn(`[Kulisy] Lorebook «${name}» could not be read.`, error); continue; }
+      for (const entry of secretEntriesOf(book, name)) {
+        const event = loreSecretEvent(state, entry.book, entry.uid);
+        if (!event) fresh.push(entry);
+        else if ((event.detail ?? '') !== cleanSecretText(entry.content)) changed.push({ event, entry });
+      }
+    }
+    return { fresh, changed };
+  }
+
+  /** New lorebook secrets → confirmed knowledge events; edited ones get their new text. */
+  async function importLoreSecrets({ books } = {}) {
+    if (isGenerationActive()) await waitForGenerationEnd();
+    const ctx = SillyTavern.getContext();
+    const { fresh, changed } = await loreSecrets(books);
+    let next = state;
+    const stamp = reason => ({ transactionId: uniqueId('manual'), reason, timestamp: new Date().toISOString() });
+    for (const { event, entry } of changed) {
+      next = applyOperation(next, createOperation('event.update', { eventId: event.id, changes: { detail: entry.content } }, stamp(`Секрет обновлён по лорбуку: ${event.text}`)));
+    }
+    let applied = 0;
+    if (fresh.length) {
+      const proposals = await scanLoreSecrets(routedContext(ctx, settings, 'discovery'), state, fresh, { personaBook: personaBookName() });
+      const nameOf = id => escapeHtml(state.entities[id]?.name ?? id);
+      const rows = proposals.map(item => `<li style="margin:6px 0"><b>${escapeHtml(item.label)}</b> <small>(«${escapeHtml(item.entry.title)}», ${escapeHtml(item.entry.book)})</small><br>Знают: ${item.knowIds.length ? item.knowIds.map(nameOf).join(', ') : 'никто'}${item.guessed ? ' <small>(по тексту записи)</small>' : ''}${item.missing.length ? `<br><small><b>Нет в списке персонажей:</b> ${item.missing.map(escapeHtml).join(', ')}</small>` : ''}${item.evidence ? `<br><small>«${escapeHtml(item.evidence)}»</small>` : ''}</li>`).join('');
+      const accepted = await ctx.Popup.show.confirm('Секреты из лорбука',
+        `<p>Найдено новых: ${proposals.length}. Записать? Пока секрет знает только тот, кто в списке, остальным модель его не покажет. Кто знает, потом можно поправить в «Знаниях».</p><ul style="text-align:left">${rows}</ul>`);
+      if (accepted === ctx.POPUP_RESULT.AFFIRMATIVE) {
+        for (const item of proposals) {
+          next = applyOperation(next, createOperation('event.add', {
+            item: {
+              id: uniqueId('event'), text: item.label, witnessIds: item.knowIds, secret: true,
+              lore: { book: item.entry.book, uid: item.entry.uid }, detail: item.entry.content, createdAt: new Date().toISOString(),
+            },
+          }, stamp(`Секрет из лорбука: ${item.label}`)));
+          applied += 1;
+        }
+      }
+    }
+    if (next !== state) { await commit(next, true); refreshPrompt(); }
+    return { applied, updated: changed.length, found: fresh.length };
+  }
+
+  /** On opening a chat: only tell about new secrets, never ask the model by itself. */
+  async function remindLoreSecrets() {
+    if (!settings.enabled || settings.trackKnowledge === false) return;
+    const { fresh, changed } = await loreSecrets();
+    if (changed.length) await importLoreSecrets().catch(error => logEvent('warn', 'Секреты из лорбука не обновились', error));
+    if (fresh.length) {
+      globalThis.toastr?.info?.(`Новых секретов в лорбуках: ${fresh.length}. Кулисы → Персонажи → «Секреты из лорбука».`, 'Кулисы', { timeOut: 10000 });
+    }
+  }
+
   function cardWorldNames() {
     const ctx = SillyTavern.getContext();
     let cards = [];
@@ -1024,6 +1106,27 @@ export async function init() {
     return leaks.reverse();
   }
 
+  /** Deaths the chronicler proposed and nobody answered yet; newest first. */
+  function openDeaths(chat = SillyTavern.getContext().chat ?? []) {
+    const deaths = [];
+    chat.forEach((message, messageIndex) => {
+      for (const death of message?.extra?.[MESSAGE_EXTRA_KEY]?.deaths ?? []) {
+        if (!state.entities[death.entityId] || isDead(state, death.entityId)) continue;
+        deaths.push({ messageIndex, entityId: death.entityId, name: state.entities[death.entityId].name, note: death.note ?? '', quote: death.quote ?? '' });
+      }
+    });
+    return deaths.reverse();
+  }
+
+  async function forgetDeath(messageIndex, entityId) {
+    const ctx = SillyTavern.getContext();
+    const marker = ctx.chat?.[messageIndex]?.extra?.[MESSAGE_EXTRA_KEY];
+    if (!marker?.deaths) return;
+    marker.deaths = marker.deaths.filter(death => death.entityId !== entityId);
+    if (!marker.deaths.length) delete marker.deaths;
+    await ctx.saveChat();
+  }
+
   /** Continuity slips the scene chronicler flagged, newest first (dismissed ones are gone from the marker). */
   function openSlips(chat = SillyTavern.getContext().chat ?? []) {
     const slips = [];
@@ -1071,6 +1174,7 @@ export async function init() {
       await commit(next, true);
       return { applied: fresh.length };
     },
+    onScanSecrets: () => importLoreSecrets(),
     onSetScene: async ({ presentIds: ids, location }) => {
       const payload = { presentIds: ids ?? presentIds(state) };
       if (location != null) payload.location = String(location);
@@ -1127,6 +1231,35 @@ export async function init() {
           `${state.entities[entityId].name} знает (отмечено на утечке): ${event.text}`);
       }
       await forgetLeak(messageIndex, entityId, eventId);
+      notify();
+    },
+    /** By hand (dossier): not bound to a message, so no swipe takes it back. dead: false = alive again. */
+    onSetDeath: async ({ entityId, dead = true, note = '' }) => {
+      requireCharacter(entityId);
+      const name = state.entities[entityId].name;
+      await manualKnowledge('death.set', { entityId, dead: Boolean(dead), note }, dead ? `${name}: умер(ла)${note ? ` — ${note}` : ''}` : `${name}: снова жив(а)`);
+      refreshPrompt();
+      notify();
+    },
+    /** From the plaque: journaled with that message, so deleting or re-checking it takes the death back. */
+    onDeathConfirm: async ({ messageIndex, entityId }) => {
+      requireCharacter(entityId);
+      const ctx = SillyTavern.getContext();
+      const marker = ctx.chat?.[messageIndex]?.extra?.[MESSAGE_EXTRA_KEY];
+      const proposal = marker?.deaths?.find(death => death.entityId === entityId);
+      if (!marker || !proposal) throw new Error('Отметка уже снята.');
+      const operation = createOperation('death.set', { entityId, dead: true, note: proposal.note ?? '' }, {
+        transactionId: marker.transactionId ?? uniqueId('death'), messageId: String(messageIndex), messageIndex,
+        id: uniqueId('analysis'), reason: `${state.entities[entityId].name}: умер(ла)${proposal.note ? ` — ${proposal.note}` : ''}`, timestamp: new Date().toISOString(),
+      });
+      marker.operationIds = [...(marker.operationIds ?? []), operation.id];
+      await commit(applyOperation(state, operation), true);
+      await forgetDeath(messageIndex, entityId);
+      refreshPrompt();
+      notify();
+    },
+    onDeathDismiss: async ({ messageIndex, entityId }) => {
+      await forgetDeath(messageIndex, entityId);
       notify();
     },
     onLeakDismiss: async ({ messageIndex, entityId, eventId }) => {
@@ -1455,7 +1588,14 @@ export async function init() {
       next.ui.linkedLorebooks = [...new Set([...(next.ui.linkedLorebooks ?? []), name])];
       await commit(next, true);
       // Offer character discovery right after linking, so the roster fills without manual work.
-      analyzeLorebooksForCharacters({ names: [name] }).catch(error => console.error('[Kulisy] Lorebook character discovery failed.', error));
+      // Secrets go after it: their knowers are found among the characters.
+      analyzeLorebooksForCharacters({ names: [name] })
+        .catch(error => console.error('[Kulisy] Lorebook character discovery failed.', error))
+        .then(async () => {
+          const { fresh } = await loreSecrets([name]);
+          if (fresh.length) await importLoreSecrets({ books: [name] });
+        })
+        .catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы'));
     },
     onUnlinkLorebook: async ({ name }) => {
       const next = structuredClone(state);
@@ -1681,7 +1821,7 @@ export async function init() {
       'Инъекция': settings.enabled && settings.injectPrompt ? 'вкл' : 'выкл',
       // Never the key or the URL: only which mode is used.
       'Вспомогательный API': settings.aux?.mode === 'profile' ? 'профиль подключения' : settings.aux?.mode === 'custom' ? 'свой URL' : 'выкл',
-      'Эмбеддинги': settings.embeddings?.mode === 'local' ? `локально (${settings.embeddings.localModel}, ${settings.embeddings.dtype})` : settings.embeddings?.mode === 'api' ? `API (${settings.embeddings.format})` : 'выкл',
+      'Эмбеддинги': settings.embeddings?.mode === 'local' ? `локально (${settings.embeddings.localModel})` : settings.embeddings?.mode === 'api' ? `API (${settings.embeddings.format})` : 'выкл',
       'Персонажей / линий': `${Object.keys(state.entities).length} / ${Object.keys(state.relationships).length}`,
     }),
     onClearDiagnostics: () => { clearLog(); notify(); },
@@ -1693,10 +1833,14 @@ export async function init() {
       const config = normalizeEmbeddings({ ...settings.embeddings, ...embeddings });
       if (config.mode === 'off') throw new Error('Смысловой поиск выключен.');
       const started = Date.now();
-      const [scene, fact] = await embedTexts(config, ['Они вместе идут домой под дождём', 'Он всегда провожает её до дома'], 'passage');
+      // A close and a far pair: every model has its own scale, so the user sees where the threshold belongs.
+      const [scene] = await embedTexts(config, ['Они вместе идут домой под дождём'], 'query');
+      const [fact, far] = await embedTexts(config, ['Он всегда провожает её до дома', 'Цены на бензин снова выросли'], 'passage');
       const seconds = ((Date.now() - started) / 1000).toFixed(1);
-      logEvent('info', `Проверка эмбеддингов: ${scene.length} измерений за ${seconds} с`);
-      return `Работает: вектор из ${scene.length} чисел за ${seconds} с, сходство примера ${cosine(scene, fact).toFixed(2)}.`;
+      const near = cosine(scene, fact);
+      const away = cosine(scene, far);
+      logEvent('info', `Проверка эмбеддингов: ${scene.length} измерений за ${seconds} с, близкое ${near.toFixed(2)}, далёкое ${away.toFixed(2)}`);
+      return `Работает: вектор из ${scene.length} чисел за ${seconds} с. Сходство близкого по смыслу ${near.toFixed(2)}, далёкого ${away.toFixed(2)}. Порог, если нужен, ставьте между ними.`;
     },
     onAuxPurposes: () => ({ ...AUX_PURPOSES }),
     /** Where pictures go and what the folder plugin says; never throws (a missing plugin is a normal answer). */
@@ -2010,7 +2154,11 @@ export async function init() {
     next = applied.state;
     const operations = applied.operations;
     const leaks = applied.leaks ?? [];
+    const deaths = applied.deaths ?? [];
     const slips = applied.slips ?? [];
+    for (const death of deaths) {
+      logEvent('warn', `${label}: похоже, ${next.entities[death.entityId]?.name ?? death.entityId} умирает${death.note ? ` (${death.note})` : ''}${death.quote ? `: «${death.quote}»` : ''}`);
+    }
     for (const slip of slips) {
       logEvent('warn', `${label}: возможный ляп (${SLIP_LABELS[slip.kind] ?? slip.kind})${slip.entityId ? ` — ${next.entities[slip.entityId]?.name ?? slip.entityId}` : ''}: «${slip.quote}»${slip.note ? ` (${slip.note})` : ''}`);
     }
@@ -2023,7 +2171,7 @@ export async function init() {
       next = { ...next, ui: { ...next.ui, headcanons: added.headcanons } };
       headcanonIds.push(...added.ids);
     }
-    if (!operations.length && !headcanonIds.length && !leaks.length && !slips.length) return skip('модель не нашла изменений');
+    if (!operations.length && !headcanonIds.length && !leaks.length && !deaths.length && !slips.length) return skip('модель не нашла изменений');
     message.extra ??= {};
     message.extra[MESSAGE_EXTRA_KEY] = {
       fingerprint: textHash,
@@ -2032,6 +2180,8 @@ export async function init() {
       ...(headcanonIds.length ? { headcanonIds } : {}),
       // Leaks are not journaled: they describe this text, and the badge reads them here.
       ...(leaks.length ? { leaks } : {}),
+      // A death is only proposed: the plaque under the reply asks, the answer is journaled with this message.
+      ...(deaths.length ? { deaths } : {}),
       // Continuity slips (clothes, things, time, place) of this text, for the plaque under it.
       ...(slips.length ? { slips } : {}),
       analyzedAt: new Date().toISOString(),
@@ -2212,6 +2362,17 @@ export async function init() {
     const epoch = chatEpoch;
     prepareHeadcanons().then(() => { if (epoch === chatEpoch) refreshPrompt(); });
     enrichAliases();
+    remindLoreSecrets().catch(error => logEvent('warn', 'Секреты из лорбука не проверены', error));
+  });
+  // Lorebook secrets never reach SillyTavern's own world info: Kulisy sends them to who knows.
+  listen(events.WORLDINFO_ENTRIES_LOADED, lists => {
+    if (!settings.enabled || settings.trackKnowledge === false) return;
+    try {
+      const removed = stripSecretEntries(lists);
+      if (removed) console.debug(`[Kulisy] Lorebook secrets kept out of world info: ${removed}`);
+    } catch (error) {
+      console.error('[Kulisy] Lorebook secrets could not be filtered.', error);
+    }
   });
   listen(events.MESSAGE_RECEIVED, messageIndex => {
     // The corrections were for this reply: they are done.
@@ -2253,13 +2414,14 @@ export async function init() {
     const personaId = state.ui?.personaId || '';
     const here = new Set(presentIds(state));
     const nearby = mentionedEntities(state, recentSceneText(SillyTavern.getContext().chat, 3, 4000));
-    const ids = [...new Set([...here, ...nearby])].filter(id => state.entities[id]);
+    const ids = [...new Set([...here, ...nearby])].filter(id => state.entities[id] && !isDead(state, id));
     return {
       chips: enabled && settings.sceneChips !== false,
       cast: ids.map(id => ({ id, name: state.entities[id].name, present: here.has(id), persona: id === personaId })),
       location: state.knowledge?.scene?.location ?? '',
       time: settings.trackWorld !== false ? (state.world?.clock?.time ?? '') : '',
       leaks: enabled ? openLeaks() : [],
+      deaths: enabled ? openDeaths() : [],
       slips: settings.enabled && settings.trackWorld !== false ? openSlips() : [],
     };
   }
@@ -2269,6 +2431,8 @@ export async function init() {
     onTogglePresent: (id, present) => knowledgeCallbacks.onTogglePresent({ characterId: id, present })
       .catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
     onLeak: (action, payload) => knowledgeCallbacks[LEAK_ACTIONS[action]]?.(payload)
+      .catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
+    onDeath: (action, payload) => knowledgeCallbacks[action === 'confirm' ? 'onDeathConfirm' : 'onDeathDismiss'](payload)
       .catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
     onSlip: (action, payload) => {
       const handler = { swipe: 'onSlipSwipe', edit: 'onSlipEdit', accept: 'onSlipAccept', dismiss: 'onSlipDismiss', remind: 'onSlipRemind' }[action];

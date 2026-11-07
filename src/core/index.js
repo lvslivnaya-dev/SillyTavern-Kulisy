@@ -15,7 +15,7 @@ export {
 } from './headcanons.js';
 export {
   ACQUAINTANCE_STATUSES, KNOWLEDGE_LIMITS, KNOWLEDGE_OPERATION_TYPES, KNOWLEDGE_SOURCES,
-  acquaintanceOf, dossier, emptyKnowledge, howKnows, pairKey, presentIds, validateKnowledge, whoKnows,
+  acquaintanceOf, deathOf, dossier, emptyKnowledge, howKnows, isDead, pairKey, presentIds, validateKnowledge, whoKnows,
 } from './knowledge.js';
 export {
   DAY_PARTS, FEATURE_KINDS, ITEM_IMPORTANCE, WORLD_LIMITS, WORLD_OPERATION_TYPES,
@@ -32,6 +32,7 @@ export {
   chronicleStats, editSummary, emptyChronicle, levelLabel, markStale, mergeCandidates, mergeSummaries, normalizeChronicle, pinSummary,
   rebuildScene, removeScene, scenesOf, unfoldSummary,
 } from './chronicle.js';
+export { LORE_SECRET_LIMITS, cleanSecretText, isSecretEntry, loreSecretEvent, parseSecretMark, secretEntriesOf, stripSecretEntries } from './lore-secrets.js';
 export { KNOWLEDGE_PROMPT_DEFAULTS, KNOWLEDGE_RULES, buildKnowledgePrompt, selectKnowledgeLines } from './knowledge-prompt.js';
 export {
   WARDROBE_CATEGORIES, WARDROBE_GENDERS, WARDROBE_LIMITS, WARDROBE_SHELVES, WARDROBE_VERSION, addCard, addLook, addToWorn, cardLabel, cardsOf, cleanImagePath,

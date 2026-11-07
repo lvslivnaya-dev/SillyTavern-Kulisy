@@ -1,7 +1,8 @@
 /**
  * Kulisy inside SillyTavern's own chat, outside the Studio:
  *   - chips above the message box: who is on stage (click to send someone off or bring them on);
- *   - a note under a reply where the chronicler found a leak, with its three answers.
+ *   - a note under a reply where the chronicler found a leak, with its three answers;
+ *   - a note under a reply where a character seems to die: mark it, or not.
  *
  * It lives in ST's DOM (not a shadow root), so it is styled by style.css with
  * ST theme variables only. All markup is built with textContent: names and
@@ -10,6 +11,7 @@
 const CHIPS_ID = 'ku-scene-chips';
 const LEAK_CLASS = 'ku-leak';
 const SLIP_CLASS = 'ku-slip';
+const DEATH_CLASS = 'ku-death-note-chat';
 
 function node(tag, className, text) {
   const element = document.createElement(tag);
@@ -35,7 +37,7 @@ function actionButton(label, action, data, title) {
  *   leaks: [{ messageIndex, entityId, eventId, name, eventText, quote, canSwipe }],
  * }
  */
-export function mountChatOverlay({ onTogglePresent, onLeak, onSlip, onOpenStudio }) {
+export function mountChatOverlay({ onTogglePresent, onLeak, onSlip, onDeath, onOpenStudio }) {
   const onClick = event => {
     const target = event.target instanceof Element ? event.target.closest('[data-ku-action]') : null;
     if (!target) return;
@@ -45,6 +47,7 @@ export function mountChatOverlay({ onTogglePresent, onLeak, onSlip, onOpenStudio
     try {
       if (action === 'present') onTogglePresent(entityId, target.dataset.present !== 'true');
       else if (action === 'studio') onOpenStudio?.(target.dataset.tab);
+      else if (action.startsWith('death-')) onDeath?.(action.slice(6), { messageIndex: Number(messageIndex), entityId });
       else if (action.startsWith('slip-')) onSlip?.(action.slice(5), { messageIndex: Number(messageIndex), slipIndex: Number(slipIndex) });
       else onLeak(action, { messageIndex: Number(messageIndex), entityId, eventId });
     } catch (error) {
@@ -158,11 +161,34 @@ export function mountChatOverlay({ onTogglePresent, onLeak, onSlip, onOpenStudio
     }
   }
 
+  function renderDeaths(view) {
+    for (const old of document.querySelectorAll(`#chat .${DEATH_CLASS}`)) old.remove();
+    for (const death of view.deaths ?? []) {
+      const block = document.querySelector(`#chat .mes[mesid="${death.messageIndex}"] .mes_block`);
+      if (!block) continue;
+      const data = { messageIndex: death.messageIndex, entityId: death.entityId };
+      const note = node('div', `${LEAK_CLASS} ${DEATH_CLASS}`);
+      note.setAttribute('role', 'note');
+      const text = node('div', 'ku-leak-text');
+      text.append(node('i', 'fa-solid fa-cross'), node('b', null, ` Похоже, ${death.name} умирает${death.note ? `: ${death.note}` : ''}. `));
+      if (death.quote) text.append(node('span', 'ku-leak-quote', `«${death.quote}»`));
+      const actions = node('div', 'ku-leak-actions');
+      actions.append(
+        actionButton('Отметить', 'death-confirm', data, 'Персонаж умер: уходит со сцены, модель больше не выводит его живым. Удаление или свайп этого ответа снимут отметку.'),
+        actionButton('Нет', 'death-dismiss', data, 'Не умер: убрать отметку, ничего не записывая'),
+      );
+      note.append(text, actions);
+      const anchor = block.querySelector('.mes_text');
+      if (anchor?.nextSibling) block.insertBefore(note, anchor.nextSibling); else block.append(note);
+    }
+  }
+
   return {
     render(view) {
       try {
         renderChips(view);
         renderLeaks(view);
+        renderDeaths(view);
         renderSlips(view);
       } catch (error) {
         console.error('[Kulisy] Chat overlay render failed.', error);
@@ -173,6 +199,7 @@ export function mountChatOverlay({ onTogglePresent, onLeak, onSlip, onOpenStudio
       document.getElementById(CHIPS_ID)?.remove();
       for (const old of document.querySelectorAll(`.${LEAK_CLASS}`)) old.remove();
       for (const old of document.querySelectorAll(`.${SLIP_CLASS}`)) old.remove();
+      for (const old of document.querySelectorAll(`.${DEATH_CLASS}`)) old.remove();
     },
   };
 }

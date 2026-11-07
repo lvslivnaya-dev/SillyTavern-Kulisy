@@ -2,10 +2,12 @@
  * Who knows what, who is on stage, who has met whom.
  *
  * state.knowledge = {
- *   events:        [{ id, text, witnessIds[], location?, secret?, disabled?, createdAt? }]
+ *   events:        [{ id, text, witnessIds[], location?, secret?, disabled?, createdAt?, lore?, detail? }]
+ *                  (lore: { book, uid } of a lorebook secret, detail: its text — see lore-secrets.js)
  *   learned:       [{ id, eventId, entityId, source: 'told'|'rumor', fromId?, disabled? }]
  *   acquaintances: { 'a|b': 'known' | 'seen' | 'strangers' }   (sorted pair key; absent = default)
  *   scene:         { presentIds[], location, locationId? }   (locationId: a card in state.world.locations)
+ *   deaths:        { entityId: { note } }   (dead: off stage, their own lines frozen; note = how and when)
  * }
  *
  * Everything changes through journaled operations, so a swipe or a deleted
@@ -17,10 +19,12 @@
  * dropped from lists. Callers (the analyzer, the UI) validate before writing.
  */
 
+import { cleanSecretText } from './lore-secrets.js';
+
 export const KNOWLEDGE_OPERATION_TYPES = Object.freeze([
   'event.add', 'event.update', 'event.remove',
   'learned.add', 'learned.remove', 'knowledge.toggle',
-  'acquaintance.set', 'scene.set',
+  'acquaintance.set', 'scene.set', 'death.set',
 ]);
 
 /** How a character knows an event. `seen` is implied by being a witness. */
@@ -30,7 +34,7 @@ const LEARNED_SOURCES = new Set(['told', 'rumor']);
 /** known: introduced; seen: met, name unknown; strangers: never met. */
 export const ACQUAINTANCE_STATUSES = Object.freeze(['known', 'seen', 'strangers']);
 
-export const KNOWLEDGE_LIMITS = Object.freeze({ events: 3000, learned: 10000, text: 500, location: 120, present: 50 });
+export const KNOWLEDGE_LIMITS = Object.freeze({ events: 3000, learned: 10000, text: 500, location: 120, present: 50, book: 200, deathNote: 300 });
 
 export function emptyKnowledge() {
   return { events: [], learned: [], acquaintances: {}, scene: { presentIds: [], location: '' } };
@@ -45,6 +49,14 @@ function cleanText(value, max) {
   return String(value ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 }
 
+/** { book, uid } of a lorebook secret, or null. */
+function loreRef(value) {
+  if (!value || typeof value !== 'object') return null;
+  const book = String(value.book ?? '').trim().slice(0, KNOWLEDGE_LIMITS.book);
+  const uid = String(value.uid ?? '').trim();
+  return book && uid ? { book, uid } : null;
+}
+
 function knownIds(next, ids) {
   if (!Array.isArray(ids)) return [];
   return [...new Set(ids.map(String))].filter(id => next.entities[id]).sort();
@@ -57,6 +69,7 @@ function knowledgeOf(next) {
   knowledge.learned ??= [];
   knowledge.acquaintances ??= {};
   knowledge.scene ??= { presentIds: [], location: '' };
+  knowledge.deaths ??= {};
   return knowledge;
 }
 
@@ -76,12 +89,20 @@ export function applyKnowledgeMutation(next, operation) {
       const text = cleanText(item.text, KNOWLEDGE_LIMITS.text);
       if (!text) throw new TypeError('event needs text');
       if (knowledge.events.some(event => event.id === id)) break;
+      const lore = loreRef(item.lore);
+      // One event per lorebook entry: a second import of it is a no-op.
+      if (lore && knowledge.events.some(event => event.lore?.book === lore.book && event.lore?.uid === lore.uid)) break;
       if (knowledge.events.length >= KNOWLEDGE_LIMITS.events) throw new RangeError('Event limit reached');
       const event = { id, text, witnessIds: knownIds(next, item.witnessIds) };
       const location = cleanText(item.location, KNOWLEDGE_LIMITS.location);
       if (location) event.location = location;
       if (item.secret) event.secret = true;
       if (item.createdAt) event.createdAt = String(item.createdAt);
+      if (lore) {
+        event.lore = lore;
+        const detail = cleanSecretText(item.detail);
+        if (detail) event.detail = detail;
+      }
       knowledge.events.push(event);
       break;
     }
@@ -107,6 +128,10 @@ export function applyKnowledgeMutation(next, operation) {
       }
       if (changes.secret != null) {
         if (changes.secret) event.secret = true; else delete event.secret;
+      }
+      if (changes.detail != null && event.lore) {
+        const detail = cleanSecretText(changes.detail);
+        if (detail) event.detail = detail; else delete event.detail;
       }
       break;
     }
@@ -155,8 +180,19 @@ export function applyKnowledgeMutation(next, operation) {
       else throw new RangeError(`Unknown acquaintance status: ${payload.status}`);
       break;
     }
+    case 'death.set': {
+      // dead: false brings them back (a resurrection, a mistake, an AU).
+      const entityId = String(payload.entityId ?? '');
+      if (!next.entities[entityId]) break;
+      if (payload.dead === false) { delete knowledge.deaths[entityId]; break; }
+      const note = cleanText(payload.note, KNOWLEDGE_LIMITS.deathNote);
+      knowledge.deaths[entityId] = note ? { note } : {};
+      knowledge.scene.presentIds = knowledge.scene.presentIds.filter(id => id !== entityId);
+      break;
+    }
     case 'scene.set': {
-      const presentIds = knownIds(next, payload.presentIds).slice(0, KNOWLEDGE_LIMITS.present);
+      // The dead do not walk back on stage, whoever lists them.
+      const presentIds = knownIds(next, payload.presentIds).filter(id => !knowledge.deaths[id]).slice(0, KNOWLEDGE_LIMITS.present);
       const previous = knowledge.scene ?? {};
       // Toggling who is present (the chips) keeps the place as it was.
       let location = Object.hasOwn(payload, 'location') ? cleanText(payload.location, KNOWLEDGE_LIMITS.location) : previous.location ?? '';
@@ -192,6 +228,7 @@ export function forgetEntity(next, entityId) {
     if (key.split('|').includes(entityId)) delete knowledge.acquaintances[key];
   }
   knowledge.scene.presentIds = knowledge.scene.presentIds.filter(id => id !== entityId);
+  delete knowledge.deaths[entityId];
 }
 
 /** Two records of one character become one: `fromId`'s knowledge goes to `intoId`. */
@@ -219,6 +256,11 @@ export function mergeKnowledgeEntity(next, fromId, intoId) {
     if (!knowledge.acquaintances[merged]) knowledge.acquaintances[merged] = value;
   }
   knowledge.scene.presentIds = [...new Set(knowledge.scene.presentIds.map(swap))];
+  if (knowledge.deaths[fromId]) {
+    // The record we keep wins.
+    knowledge.deaths[intoId] ??= knowledge.deaths[fromId];
+    delete knowledge.deaths[fromId];
+  }
 }
 
 /** Shape errors of state.knowledge (empty array when valid). */
@@ -236,6 +278,7 @@ export function validateKnowledge(knowledge, entityIds) {
       ids.add(event.id);
       if (typeof event.text !== 'string' || !event.text.trim()) errors.push(`knowledge event ${event.id} needs text`);
       if (!Array.isArray(event.witnessIds) || event.witnessIds.some(id => !known(id))) errors.push(`knowledge event ${event.id} has unknown witnesses`);
+      if (event.lore != null && !loreRef(event.lore)) errors.push(`knowledge event ${event.id} has a broken lorebook link`);
     }
     if (!Array.isArray(knowledge.learned)) errors.push('knowledge.learned must be an array');
     else for (const entry of knowledge.learned) {
@@ -254,6 +297,10 @@ export function validateKnowledge(knowledge, entityIds) {
       if (!known(first) || !known(second) || first === second) errors.push(`acquaintance ${key} has unknown characters`);
       if (!ACQUAINTANCE_STATUSES.includes(status)) errors.push(`acquaintance ${key} has an unknown status`);
     }
+  }
+  if (knowledge.deaths != null) {
+    if (typeof knowledge.deaths !== 'object' || Array.isArray(knowledge.deaths)) errors.push('knowledge.deaths must be an object');
+    else for (const id of Object.keys(knowledge.deaths)) if (!known(id)) errors.push(`death of an unknown character ${id}`);
   }
   const scene = knowledge.scene;
   if (!scene || typeof scene !== 'object' || !Array.isArray(scene.presentIds) || scene.presentIds.some(id => !known(id))) {
@@ -322,7 +369,16 @@ export function acquaintanceOf(state, firstId, secondId) {
   return null;
 }
 
-/** Characters currently on stage (IDs that still exist). */
+/** { note } when the character is dead, else null. */
+export function deathOf(state, entityId) {
+  return state?.knowledge?.deaths?.[entityId] ?? null;
+}
+
+export function isDead(state, entityId) {
+  return Boolean(deathOf(state, entityId));
+}
+
+/** Characters currently on stage (IDs that still exist, and alive). */
 export function presentIds(state) {
-  return (state.knowledge?.scene?.presentIds ?? []).filter(id => state.entities?.[id]);
+  return (state.knowledge?.scene?.presentIds ?? []).filter(id => state.entities?.[id] && !isDead(state, id));
 }

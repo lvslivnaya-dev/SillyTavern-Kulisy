@@ -191,7 +191,7 @@ export function createWorldPages(ctx) {
     let index = -1;
     for (const operation of operations) if (Number.isInteger(operation.messageIndex) && operation.messageIndex > index) index = operation.messageIndex;
     if (index < 0) return { index, rows: [] };
-    const TYPE_ICON = { 'clock.set': 'clock', 'scene.set': 'pin', 'location.add': 'pin', 'location.update': 'pin', 'wardrobe.set': 'shirt', 'condition.add': 'shirt', 'condition.remove': 'shirt', 'item.add': 'bag', 'item.update': 'bag', 'item.remove': 'bag', 'scale.delta': 'heart', 'memory.add': 'clock', 'tension.add': 'bolt', 'event.add': 'eye', 'learned.add': 'eye', 'acquaintance.set': 'people' };
+    const TYPE_ICON = { 'clock.set': 'clock', 'scene.set': 'pin', 'location.add': 'pin', 'location.update': 'pin', 'wardrobe.set': 'shirt', 'condition.add': 'shirt', 'condition.remove': 'shirt', 'item.add': 'bag', 'item.update': 'bag', 'item.remove': 'bag', 'scale.delta': 'heart', 'memory.add': 'clock', 'tension.add': 'bolt', 'event.add': 'eye', 'learned.add': 'eye', 'acquaintance.set': 'people', 'death.set': 'people' };
     const rows = operations.filter(operation => operation.messageIndex === index && operation.reason)
       .map(operation => ({ id: operation.id, iconName: TYPE_ICON[operation.type] ?? 'check', text: operation.reason }));
     return { index, rows };

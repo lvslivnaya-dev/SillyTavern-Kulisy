@@ -7,17 +7,18 @@
  *   events  — new happenings that others may or may not know about;
  *   learned — information reaching a character ON PAGE (told, overheard, rumour);
  *   met     — introductions;
- *   leaks   — a character acting on an event they cannot know.
+ *   leaks   — a character acting on an event they cannot know;
+ *   deaths  — a character dying on page (only proposed: the user confirms under the reply).
  *
  * The model only proposes. Everything is resolved to registered characters and
  * checked against the current dossiers here before it becomes journal operations.
  */
-import { acquaintanceOf, howKnows, pairKey, presentIds, uniqueId } from '../core/index.js';
+import { acquaintanceOf, howKnows, isDead, pairKey, presentIds, uniqueId } from '../core/index.js';
 import { mentionedEntities } from './headcanon-retrieval.js';
 import { WORLD_INSTRUCTIONS, buildWorldBlock, parseWorld } from './world-analysis.js';
 
 export const CHRONICLE_LIMITS = Object.freeze({
-  candidates: 15, events: 3, learned: 8, met: 6, leaks: 4, text: 300, quote: 160, location: 120,
+  candidates: 15, events: 3, learned: 8, met: 6, leaks: 4, deaths: 3, text: 300, quote: 160, location: 120, deathNote: 200,
 });
 
 const LEARN_SOURCES = new Set(['told', 'rumor']);
@@ -96,13 +97,14 @@ export function buildKnowledgeBlock(state, text, candidates) {
 }
 
 /** Instructions appended to the analyzer's system prompt. */
-export const KNOWLEDGE_INSTRUCTIONS = ` Also return "knowledge": {"scene":{"presentIds":["a"],"location":"short place"},"events":[{"key":"n1","text":"short Russian description","witnessIds":["a","b"],"secret":false}],"learned":[{"eventId":"event ID or new key","entityId":"c","source":"told","fromId":"a"}],"met":[{"ids":["a","c"],"status":"known"}],"leaks":[{"entityId":"c","eventId":"event ID","quote":"words from the reply"}]}.
+export const KNOWLEDGE_INSTRUCTIONS = ` Also return "knowledge": {"scene":{"presentIds":["a"],"location":"short place"},"events":[{"key":"n1","text":"short Russian description","witnessIds":["a","b"],"secret":false}],"learned":[{"eventId":"event ID or new key","entityId":"c","source":"told","fromId":"a"}],"met":[{"ids":["a","c"],"status":"known"}],"leaks":[{"entityId":"c","eventId":"event ID","quote":"words from the reply"}],"deaths":[{"entityId":"d","note":"how, a few Russian words","quote":"words from the reply"}]}.
 KNOWLEDGE RULES:
 - scene.presentIds: registered characters physically present at the END of this reply (include the user persona when present). location: where they are, a few Russian words; repeat the previous place if it did not change.
 - events: at most ${CHRONICLE_LIMITS.events} NEW concrete happenings of this reply that other characters could later know or not know — a private conversation, a confession, a fight, a revealed secret, a discovery. Not feelings, not routine actions, not repeats of listed events. witnessIds: everyone who saw or heard it happen, as quoted IDs (never a word like all). secret: true when the participants clearly keep it from others.
-- learned: ONLY when this reply SHOWS information reaching a character who did not have it: someone tells them, they overhear, read or are shown it. source "told" for direct transmission (fromId = who told; omit fromId when overheard or read), "rumor" for second-hand hearsay. eventId is a listed event ID or the key of a new event. Never for witnesses, never because someone "could have heard".
+- learned: ONLY when this reply SHOWS information reaching a character who did not have it: someone tells them, they overhear, read or are shown it, or see it with their own eyes (a hidden scar, a tattoo, proof). source "told" for direct transmission (fromId = who told; omit fromId when overheard or read), "rumor" for second-hand hearsay. eventId is a listed event ID or the key of a new event. Never for witnesses, never because someone "could have heard".
 - met: introductions in this reply — "known" when they learn each other's names, "seen" when they meet face to face without names. Only listed not-introduced pairs and pairs with the user persona.
 - leaks: a character speaks or acts on a listed event that is unknown to them while this reply shows NO way they learned it. quote: the exact words that show it, at most 120 characters. This is the most important check: an empty array is the normal answer, a leak is never a guess.
+- deaths: a registered character who DIES in this reply, beyond doubt: the text shows the death itself or a body. Not a wound, fainting, a coma, a threat, a rumour, a lie, a dream or a staged death; when in doubt, leave it out. note: how it happened, a few Russian words. quote: the words that show it, at most 120 characters.
 Use registered IDs. Empty arrays are correct and frequent.`;
 
 const SYSTEM_ALONE = 'You track who knows what in narrator-driven roleplay: who is present, what happens, how information reaches characters, who meets whom, and when a character knows something they cannot know. The Narrator is a controller, never a character. Output ONLY valid JSON, without reasoning or markdown.';
@@ -168,7 +170,11 @@ export function parseKnowledge(value) {
     .filter(item => item && ID(item.entityId) && ID(item.eventId))
     .slice(0, CHRONICLE_LIMITS.leaks)
     .map(item => ({ entityId: ID(item.entityId), eventId: ID(item.eventId), quote: clip(item.quote, CHRONICLE_LIMITS.quote) }));
-  return { scene, events, learned, met, leaks };
+  const deaths = (Array.isArray(source.deaths) ? source.deaths : [])
+    .filter(item => item && ID(item.entityId))
+    .slice(0, CHRONICLE_LIMITS.deaths)
+    .map(item => ({ entityId: ID(item.entityId), note: clip(item.note, CHRONICLE_LIMITS.deathNote), quote: clip(item.quote, CHRONICLE_LIMITS.quote) }));
+  return { scene, events, learned, met, leaks, deaths };
 }
 
 /** Parser of the separate-request mode: { knowledge, world } (each null when it was not asked). */
@@ -184,10 +190,10 @@ export function parseKnowledgeResponse(data, { knowledge = true, world = false }
  * api.state()           — the current state (changes as operations are added);
  * api.add(type, payload, reason) — journal one operation with the reply's metadata;
  * api.resolveId(ref)    — registered ID for an ID, name or alias, or null.
- * Returns { leaks }: confirmed leaks for the message marker (not journaled).
+ * Returns { leaks, deaths }: confirmed leaks and proposed deaths for the message marker (not journaled).
  */
 export function materializeKnowledge(chronicle, api) {
-  if (!chronicle) return { leaks: [] };
+  if (!chronicle) return { leaks: [], deaths: [] };
   const { add, resolveId } = api;
   const resolveAll = refs => [...new Set((refs ?? []).map(resolveId).filter(Boolean))].sort();
   const now = new Date().toISOString();
@@ -262,5 +268,13 @@ export function materializeKnowledge(chronicle, api) {
     seen.add(key);
     leaks.push({ entityId, eventId: event.id, quote: item.quote });
   }
-  return { leaks };
+
+  // 6. Deaths: only proposed; someone already dead is not proposed again.
+  const deaths = [];
+  for (const item of chronicle.deaths ?? []) {
+    const entityId = resolveId(item.entityId);
+    if (!entityId || isDead(api.state(), entityId) || deaths.some(death => death.entityId === entityId)) continue;
+    deaths.push({ entityId, note: item.note, quote: item.quote });
+  }
+  return { leaks, deaths };
 }

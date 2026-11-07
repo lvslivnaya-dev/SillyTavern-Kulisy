@@ -11,9 +11,20 @@
  */
 const TRANSFORMERS_URL = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.8.1/dist/transformers.min.js';
 
+/**
+ * Browser models (q8 files, sizes as on Hugging Face). Each one is read the way
+ * its authors embed: e5 wants "query:"/"passage:" and mean pooling, bge-m3 the CLS token.
+ * q4 is not offered: for these models its files are bigger than q8, not smaller.
+ */
 export const LOCAL_MODELS = Object.freeze({
-  'Xenova/multilingual-e5-small': { label: 'multilingual-e5-small — многоязычная, ~33 МБ (q8)', query: 'query: ', passage: 'passage: ' },
+  'Xenova/multilingual-e5-small': { label: 'multilingual-e5-small — 112 МБ, быстрая', size: 112, pooling: 'mean', query: 'query: ', passage: 'passage: ' },
+  'Xenova/paraphrase-multilingual-MiniLM-L12-v2': { label: 'paraphrase-multilingual-MiniLM — 112 МБ, для коротких фраз', size: 112, pooling: 'mean' },
+  'Xenova/multilingual-e5-base': { label: 'multilingual-e5-base — 265 МБ, точнее (рекомендуется)', size: 265, pooling: 'mean', query: 'query: ', passage: 'passage: ' },
+  'Xenova/multilingual-e5-large': { label: 'multilingual-e5-large — 535 МБ, ещё точнее, тяжёлая', size: 535, pooling: 'mean', query: 'query: ', passage: 'passage: ' },
+  'Xenova/bge-m3': { label: 'bge-m3 — 543 МБ, лучшая для русского, самая тяжёлая', size: 543, pooling: 'cls' },
 });
+
+export const DEFAULT_LOCAL_MODEL = 'Xenova/multilingual-e5-small';
 
 const memory = new Map();
 let extractor = null;
@@ -21,7 +32,7 @@ let extractorKey = '';
 
 export function configKey(config) {
   return config.mode === 'local'
-    ? `local:${config.localModel}:${config.dtype}`
+    ? `local:${LOCAL_MODELS[config.localModel] ? config.localModel : DEFAULT_LOCAL_MODEL}:q8`
     : `api:${config.format}:${config.url}:${config.model}`;
 }
 
@@ -71,20 +82,20 @@ export async function embedTexts(config, texts, kind = 'passage') {
 }
 
 async function embedLocal(config, texts, kind) {
-  const model = LOCAL_MODELS[config.localModel] ? config.localModel : Object.keys(LOCAL_MODELS)[0];
-  const key = `${model}:${config.dtype}`;
+  const model = LOCAL_MODELS[config.localModel] ? config.localModel : DEFAULT_LOCAL_MODEL;
+  const key = `${model}:q8`;
   if (!extractor || extractorKey !== key) {
     extractorKey = key;
     extractor = (async () => {
       const { pipeline, env } = await import(TRANSFORMERS_URL);
       env.allowLocalModels = false;
-      return pipeline('feature-extraction', model, { dtype: config.dtype === 'q4' ? 'q4' : 'q8' });
+      return pipeline('feature-extraction', model, { dtype: 'q8' });
     })();
     extractor.catch(() => { extractor = null; extractorKey = ''; });
   }
   const run = await extractor;
   const prefix = LOCAL_MODELS[model][kind] ?? '';
-  const output = await run(texts.map(text => `${prefix}${text}`), { pooling: 'mean', normalize: true });
+  const output = await run(texts.map(text => `${prefix}${text}`), { pooling: LOCAL_MODELS[model].pooling ?? 'mean', normalize: true });
   return output.tolist();
 }
 

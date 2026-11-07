@@ -1,4 +1,4 @@
-import { applyOperation, createEntity, createOperation, relationshipId, uniqueId } from '../core/index.js';
+import { applyOperation, createEntity, createOperation, isDead, relationshipId, uniqueId } from '../core/index.js';
 import { coupledDeltas } from './coupling.js';
 import { materializeKnowledge } from './knowledge-analysis.js';
 import { confirmSlips, materializeClock, materializePlace, materializeSceneLocation, materializeWorldRest } from './world-analysis.js';
@@ -98,6 +98,8 @@ export function applyAnalysisResult(state, result, metadata = {}, acceptedNewCha
     const objectId = resolveId(proposed.objectId);
     if (!subjectId || !objectId) continue;
     if (personaId && subjectId === personaId) continue;
+    // The lines of the dead are frozen: grief and guilt of the living still change.
+    if (isDead(next, subjectId)) continue;
     let metric = proposed.metric;
     if (metric === 'affection' && !next.config.scales.some(scale => scale.id === metric)
       && next.config.scales.some(scale => scale.id === 'affinity')) metric = 'affinity';
@@ -143,6 +145,7 @@ export function applyAnalysisResult(state, result, metadata = {}, acceptedNewCha
       }
       const subjectId = resolveId(item.subjectId);
       const objectId = resolveId(item.objectId);
+      if (subjectId && isDead(next, subjectId)) continue;
       const id = subjectId && objectId ? ensurePair(subjectId, objectId) : null;
       if (!id) continue;
       if (next.relationships[id][collection].some(existing => existing.text?.trim().toLocaleLowerCase() === item.text.trim().toLocaleLowerCase())) continue;
@@ -167,12 +170,13 @@ export function applyAnalysisResult(state, result, metadata = {}, acceptedNewCha
   const locationId = world ? materializePlace(world, api) : undefined;
   if (world) materializeClock(world, api);
   let leaks = [];
+  let deaths = [];
   if (result.knowledge && options.trackKnowledge !== false) {
-    ({ leaks } = materializeKnowledge(result.knowledge, { ...api, locationId }));
+    ({ leaks, deaths = [] } = materializeKnowledge(result.knowledge, { ...api, locationId }));
   } else if (locationId) {
     materializeSceneLocation(api, locationId);
   }
   if (world) materializeWorldRest(world, api, locationId ?? next.knowledge?.scene?.locationId);
   const slips = world ? confirmSlips(world, api, beforeWorld) : [];
-  return { state: next, operations, headcanons, leaks, slips };
+  return { state: next, operations, headcanons, leaks, deaths, slips };
 }

@@ -1,3 +1,4 @@
+import { isDead } from './knowledge.js';
 import { collectRecords } from './records.js';
 
 function compactItems(items, limit) {
@@ -49,6 +50,8 @@ export function selectRuntimePrompt(state, options = {}) {
     .reduce((sum, [, value]) => sum + Math.abs(Number(value) || 0), 0) + (personaId && relation.to === personaId ? 50 : 0);
   const selected = Object.values(state.relationships || {})
     .filter((relation) => relation.from !== personaId)
+    // A dead character feels nothing now; what others feel toward them still matters.
+    .filter((relation) => !isDead(state, relation.from))
     .filter((relation) => !relationshipSet || relationshipSet.has(relation.id))
     .filter((relation) => !actorSet || actorSet.has(relation.from) || actorSet.has(relation.to))
     .sort((left, right) => weight(right) - weight(left) || left.id.localeCompare(right.id))

@@ -400,8 +400,8 @@ export function createSystemPages(ctx) {
 
   function renderPromptSections(text) {
     const sections = [
-      ['scene', 'Сцена и знакомства', line => /^(scene:|strangers\[|seen\[)/.test(line)],
-      ['knowledge', 'Кто чего не знает', line => /^(unknown|heard)\[/.test(line)],
+      ['scene', 'Сцена и знакомства', line => /^(scene:|strangers\[|seen\[|dead\[)/.test(line)],
+      ['knowledge', 'Кто чего не знает', line => /^(unknown|heard|secret)\[/.test(line)],
       ['rules', 'Правила: треугольники', line => line.startsWith('triangle ')],
       ['memories', 'Воспоминания', line => /^(shared|secret)-memories/.test(line)],
       ['tensions', 'Напряжения', line => /^(shared|secret)-tensions/.test(line)],
@@ -451,11 +451,8 @@ export function createSystemPages(ctx) {
     }
     const localModel = element('select', { 'aria-label': 'Локальная модель' });
     for (const model of facade.invoke('onLocalEmbeddingModels', {}) ?? []) localModel.append(element('option', { value: model.id, text: model.label, selected: model.id === config.localModel }));
-    const dtype = element('select', { 'aria-label': 'Квантизация' });
-    for (const [value, text] of [['q8', 'q8 — рекомендуется, точнее'], ['q4', 'q4 — легче, для слабых устройств']]) dtype.append(element('option', { value, text, selected: (config.dtype || 'q8') === value }));
     const localBlock = element('div', {}, [
-      field('Модель', localModel, 'Скачивается один раз (~33 МБ для q8) и дальше берётся из кэша браузера; занимает 50–80 МБ памяти. На телефонах с малым объёмом памяти лучше API.'),
-      field('Квантизация', dtype),
+      field('Модель', localModel, 'Скачивается один раз и дальше берётся из кэша браузера. В памяти занимает примерно столько же, сколько весит. Модели тяжелее 300 МБ — для компьютера; на телефоне лучше e5-small или API. После смены модели хедканоны один раз пересчитываются заново. «Проверить» скачивает модель сразу.'),
     ]);
     const format = element('select', { 'aria-label': 'Формат API' });
     for (const [value, text] of [['openai', 'OpenAI-совместимый (/embeddings)'], ['gemini', 'Gemini (batchEmbedContents)']]) format.append(element('option', { value, text, selected: (config.format || 'openai') === value }));
@@ -474,7 +471,7 @@ export function createSystemPages(ctx) {
       field('Порог сходства (0 — просто брать самые близкие)', threshold, 'Хедканоны с меньшим сходством со сценой не отправляются. Сколько отправлять — «Сколько хедканонов к сцене» выше.'),
     ]);
     const collect = () => ({
-      mode: mode.value, localModel: localModel.value, dtype: dtype.value, format: format.value,
+      mode: mode.value, localModel: localModel.value, format: format.value,
       url: url.value, key: key.value, model: model.value, threshold: Number(threshold.value),
     });
     const sync = () => {

@@ -56,7 +56,7 @@ test('knowledge block names the scene, who does not know, and who has not met', 
 });
 
 test('parseKnowledge keeps good items, drops bad ones, never throws', () => {
-  assert.deepEqual(parseKnowledge(null), { scene: null, events: [], learned: [], met: [], leaks: [] });
+  assert.deepEqual(parseKnowledge(null), { scene: null, events: [], learned: [], met: [], leaks: [], deaths: [] });
   const parsed = parseKnowledge({
     scene: { presentIds: ['a', 'a', 7, 'b'], location: '  склад  ' },
     events: [{ text: '' }, { key: 'n1', text: 'Признание', witnessIds: ['a'], secret: 'yes' }],
@@ -155,7 +155,7 @@ test('trackKnowledge off: the chronicle is ignored', () => {
 });
 
 test('materializeKnowledge with nothing to do is a no-op', () => {
-  assert.deepEqual(materializeKnowledge(null, {}), { leaks: [] });
+  assert.deepEqual(materializeKnowledge(null, {}), { leaks: [], deaths: [] });
 });
 
 function fakeModel(reply) {

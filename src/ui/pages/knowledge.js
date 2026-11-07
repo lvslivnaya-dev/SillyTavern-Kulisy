@@ -14,6 +14,7 @@ export function createKnowledgePages(ctx) {
   let selectedId = null; // character whose dossier is open
   let dossierTab = 'knows'; // knows | met | looks | wardrobe | items
   let editingEventId = null;
+  let deathDraftId = null; // dossier where the «Умер(ла)» form is open
   const newEvent = { text: '', witnessIds: new Set(), secret: false };
 
   const snapshot = () => ctx.snapshot;
@@ -23,6 +24,7 @@ export function createKnowledgePages(ctx) {
   const knowledge = () => snapshot().knowledge ?? { events: [], learned: [], acquaintances: {}, scene: { presentIds: [], location: '' } };
   const present = () => new Set((knowledge().scene?.presentIds ?? []).filter(id => characters().some(character => characterId(character) === id)));
   const events = () => knowledge().events ?? [];
+  const deathOf = id => knowledge().deaths?.[id] ?? null;
 
   function avatar(character, size = '') {
     const name = characterName(character);
@@ -38,8 +40,9 @@ export function createKnowledgePages(ctx) {
     return input;
   }
 
-  function sourceChip(how) {
+  function sourceChip(how, event) {
     if (!how) return element('span', { className: 'ku-chip', text: 'не знает' });
+    if (how.source === 'seen' && event?.lore) return element('span', { className: 'ku-chip seen', text: 'знает по лору' });
     if (how.source === 'seen') return element('span', { className: 'ku-chip seen', text: 'видел сам' });
     if (how.source === 'rumor') return element('span', { className: 'ku-chip rumor', text: 'слух' });
     // Neutral wording: a name says nothing about grammatical gender.
@@ -70,7 +73,9 @@ export function createKnowledgePages(ctx) {
             element('strong', { text: characterName(character) }),
             element('span', { className: 'muted', text: id === persona ? 'персона' : (character.aliases ?? []).slice(0, 2).join(', ') }),
           ]),
-          element('span', { className: `ku-tag${here.has(id) ? ' on' : ''}`, text: here.has(id) ? 'в сцене' : 'за кулисами' }),
+          deathOf(id)
+            ? element('span', { className: 'ku-tag ku-dead', text: 'умер(ла)' })
+            : element('span', { className: `ku-tag${here.has(id) ? ' on' : ''}`, text: here.has(id) ? 'в сцене' : 'за кулисами' }),
         ]),
         element('div', { className: 'ku-stats' }, [
           element('span', {}, [element('b', { text: String(file.knows.length) }), ' знает']),
@@ -96,7 +101,19 @@ export function createKnowledgePages(ctx) {
       catch (error) { setStatus(error?.message || 'Лорбук не прочитан', true); }
       finally { loreNames.disabled = false; }
     }, 'Берёт написания из ключей записи персонажа в лорбуке («Ран», «Ran», «Хайтани Ран»), чтобы Кулисы узнавали его под любым. Делается само при открытии чата.');
-    view.append(element('div', { className: 'row' }, [scan, loreNames, element('span', { className: 'muted', style: { fontSize: '12px' }, text: 'Персону по умолчанию не знает никто. Скан найдёт тех, с кем знакомство прописано в лоре.' })]));
+    const secrets = button('Секреты из лорбука', 'btn', async () => {
+      secrets.disabled = true;
+      setStatus('Читаю секреты в лорбуках…');
+      try {
+        const result = await ctx.facade.invoke('onScanSecrets', {});
+        const parts = [];
+        if (result?.applied) parts.push(`записано секретов: ${result.applied}`);
+        if (result?.updated) parts.push(`обновлён текст: ${result.updated}`);
+        setStatus(parts.length ? parts.join(', ').replace(/^./, letter => letter.toUpperCase()) : result?.found ? 'Секреты не записаны' : 'Новых секретов нет. Секрет — запись лорбука с названием «[Секрет] …» или «[Секрет: Имя, Имя] …».');
+      } catch (error) { setStatus(error?.message || 'Не удалось прочитать секреты', true); }
+      finally { secrets.disabled = false; }
+    }, 'Записи лорбука с названием «[Секрет] …» или «[Секрет: Риндо, Санзу] …». Кулисы убирают их из лорбука таверны и отдают только тем, кто знает. Если знающие не вписаны в название, ИИ найдёт их по тексту, а вы подтвердите.');
+    view.append(element('div', { className: 'row' }, [scan, secrets, loreNames, element('span', { className: 'muted', style: { fontSize: '12px' }, text: 'Персону по умолчанию не знает никто. Скан найдёт тех, с кем знакомство прописано в лоре.' })]));
     const all = snapshot().duplicates ?? [];
     const twins = all.filter(pair => pair.sure !== false);
     const maybe = all.filter(pair => pair.sure === false);
@@ -162,6 +179,7 @@ export function createKnowledgePages(ctx) {
         element('h3', { text: characterName(character) }),
         element('span', { className: 'muted', text: id === personaId() ? 'Персона: что она знает, решаете вы; здесь видно, с кем она знакома.' : 'Досье: что знает, чего не знает и с кем знаком.' }),
       ]), element('div', { className: 'ku-name-tools' }, [mainName(id), mergeWith(id)])]),
+      renderDeath(id),
       tabs,
       dossierTab === 'met' ? renderAcquaintances(id)
         : dossierTab === 'looks' ? ctx.renderLooksTab(id)
@@ -170,6 +188,43 @@ export function createKnowledgePages(ctx) {
             : renderFacts(id),
     );
     return panel;
+  }
+
+  /** Dead or alive: «Умер(ла)» with how and when, or the note and «Воскресить». */
+  function renderDeath(id) {
+    const death = deathOf(id);
+    if (death) {
+      return element('div', { className: 'ku-death on' }, [
+        element('span', { className: 'ku-dead', text: 'Умер(ла)' }),
+        element('span', { className: 'ku-death-note', text: death.note ? ` — ${death.note}` : ' — как и когда, не записано' }),
+        element('span', { className: 'ku-push' }),
+        button('Воскресить', 'btn small', async () => {
+          try { await ctx.facade.invoke('onSetDeath', { entityId: id, dead: false }); setStatus(`${nameOf(id)} снова жив(а)`); }
+          catch (error) { setStatus(error?.message || 'Не удалось снять отметку', true); }
+        }, 'Снять отметку: воскрешение, ошибка или АУ'),
+      ]);
+    }
+    if (deathDraftId !== id) {
+      return element('div', { className: 'ku-death' }, [
+        button('Умер(ла)', 'btn small', () => { deathDraftId = id; render(); },
+          'Персонаж уходит со сцены, модель получает dead[…]: он не появляется и не говорит. Его чувства к другим замирают, чувства других к нему — нет.'),
+      ]);
+    }
+    const note = element('input', { type: 'text', maxlength: 300, placeholder: 'Как и когда: погиб в драке у моста, 3 августа', 'aria-label': 'Как и когда умер(ла)' });
+    const save = async () => {
+      try {
+        await ctx.facade.invoke('onSetDeath', { entityId: id, dead: true, note: note.value });
+        deathDraftId = null;
+        setStatus(`${nameOf(id)}: отмечено, что умер(ла)`);
+      } catch (error) { setStatus(error?.message || 'Не удалось отметить', true); }
+    };
+    note.addEventListener('keydown', event => { if (event.key === 'Enter') save(); });
+    setTimeout(() => note.focus(), 0);
+    return element('div', { className: 'ku-death' }, [
+      note,
+      button('Отметить', 'btn primary small', save),
+      button('Отмена', 'btn small', () => { deathDraftId = null; render(); }),
+    ]);
   }
 
   /** «Главное имя»: which spelling the Studio shows; the others stay other names. */
@@ -214,12 +269,12 @@ export function createKnowledgePages(ctx) {
       if (item.source === 'seen') {
         controls.push(button('×', 'btn icon small', () => act('onUpdateEvent', {
           eventId: item.event.id, changes: { witnessIds: item.event.witnessIds.filter(witness => witness !== id) },
-        }, 'witness-remove'), `Убрать ${nameOf(id)} из свидетелей`));
+        }, 'witness-remove'), item.event.lore ? `${nameOf(id)} не знает этот секрет` : `Убрать ${nameOf(id)} из свидетелей`));
       } else if (item.learnedId) {
         controls.push(toggle(true, 'Учитывать, что знает', value => act('onToggleKnowledge', { kind: 'learned', itemId: item.learnedId, disabled: !value }, 'learned-toggle')));
         controls.push(button('×', 'btn icon small', () => act('onRemoveLearned', { learnedId: item.learnedId }, 'learned-remove'), 'Убрать это знание'));
       }
-      box.append(factRow(item.event, sourceChip(item), controls));
+      box.append(factRow(item.event, sourceChip(item, item.event), controls));
     }
     // Switched-off "learned" entries: kept, shown dimmed, can be switched back on.
     for (const entry of learned.filter(candidate => candidate.entityId === id && candidate.disabled)) {
@@ -243,7 +298,7 @@ export function createKnowledgePages(ctx) {
   function factRow(event, chip, controls, off = false) {
     return element('div', { className: `ku-fact${off ? ' off' : ''}` }, [
       element('span', { className: 'ku-fact-text' }, [
-        event.secret ? element('span', { className: 'ku-secret', text: 'секрет · ' }) : null,
+        event.secret ? element('span', { className: 'ku-secret', text: event.lore ? 'секрет из лорбука · ' : 'секрет · ' }) : null,
         event.text,
         event.location ? element('span', { className: 'muted', text: ` · ${event.location}` }) : null,
       ].filter(Boolean)),
@@ -332,6 +387,7 @@ export function createKnowledgePages(ctx) {
       .map(entry => `${nameOf(entry.entityId)} (${entry.source === 'rumor' ? 'слух' : entry.fromId ? `от ${nameOf(entry.fromId)}` : 'узнал'})`);
     const head = element('div', { className: 'record-head' }, [
       event.secret ? element('span', { className: 'record-badge ku-secret', text: 'секрет' }) : null,
+      event.lore ? element('span', { className: 'record-badge', text: `лорбук «${event.lore.book}»`, title: 'Текст берётся из записи лорбука. Его знают только отмеченные; если в сцене никто из них, модель о нём не слышит.' }) : null,
       event.location ? element('span', { className: 'record-badge', text: event.location }) : null,
       element('span', { style: { flex: '1' } }),
       toggle(!event.disabled, 'Учитывать событие', value => act('onToggleKnowledge', { kind: 'event', itemId: event.id, disabled: !value }, 'event-toggle')),
@@ -365,7 +421,7 @@ export function createKnowledgePages(ctx) {
     item.append(
       element('p', { className: 'record-text', text: event.text }),
       element('div', { className: 'record-people' }, [
-        element('span', { className: 'muted', text: 'видели: ' }),
+        element('span', { className: 'muted', text: event.lore ? 'знают: ' : 'видели: ' }),
         ...(event.witnessIds.length ? event.witnessIds.map(id => element('span', { className: 'chip', text: nameOf(id) })) : [element('span', { className: 'muted', text: '—' })]),
       ]),
       ...(later.length ? [element('p', { className: 'muted', style: { fontSize: '12px', margin: '6px 0 0' }, text: `узнали позже: ${later.join(', ')}` })] : []),
@@ -458,6 +514,9 @@ export const KNOWLEDGE_STYLE = `
 .ku-chip.rumor{color:var(--k-warn);border-color:var(--k-warn);border-style:dashed}
 .ku-chip.warn{color:var(--k-warn);border-color:var(--k-warn)}
 .ku-secret{color:var(--k-warn);font-weight:700}
+.ku-death{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 10px}
+.ku-death input{flex:1 1 220px;min-width:0}
+.ku-dead{color:var(--k-warn);font-weight:700}
 .btn.small{min-height:30px;padding:3px 10px;font-size:12px}
 .btn.icon.small{width:30px;min-height:30px;padding:0}
 .ku-switch{appearance:none;-webkit-appearance:none;width:36px;height:20px;border-radius:20px;background:var(--k-track);position:relative;margin:0;flex:0 0 auto;cursor:pointer;border:1px solid var(--k-line)}

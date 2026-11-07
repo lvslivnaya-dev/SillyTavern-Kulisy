@@ -1,3 +1,4 @@
+import { isSecretEntry } from '../core/lore-secrets.js';
 import { withBusy } from './busy.js';
 
 const TRANSLIT_RU_TO_EN = {
@@ -139,7 +140,8 @@ export function matchLoreEntries(book, entities, bookName) {
     for (const key of canonKeys(entity.name)) aliases.add(key);
     for (const alias of entity.aliases ?? []) for (const key of canonKeys(alias)) aliases.add(key);
   }
-  return Object.values(book?.entries ?? {}).filter(entry => !entry.disable && typeof entry.content === 'string').flatMap(entry => {
+  // Secrets never reach the analyzer: it would write them down as common knowledge.
+  return Object.values(book?.entries ?? {}).filter(entry => !entry.disable && typeof entry.content === 'string' && !isSecretEntry(entry)).flatMap(entry => {
     const keywords = new Set();
     for (const value of [...(Array.isArray(entry.key) ? entry.key : []), ...(Array.isArray(entry.keysecondary) ? entry.keysecondary : []), entry.comment ?? '']) {
       for (const key of canonKeys(value)) keywords.add(key);
@@ -279,7 +281,8 @@ export async function loadGroupLore(context, state, ids, { books = [], maxCharac
     try { book = await context.loadWorldInfo(name); }
     catch (error) { console.warn(`[Kulisy] Lorebook «${name}» could not be read.`, error); continue; }
     for (const entry of Object.values(book?.entries ?? {})) {
-      if (entry.disable || typeof entry.content !== 'string' || !entry.content.trim()) continue;
+      // A secret is not lore about anyone in public: headcanons and factors would spread it.
+      if (entry.disable || typeof entry.content !== 'string' || !entry.content.trim() || isSecretEntry(entry)) continue;
       const keys = new Set([...(Array.isArray(entry.key) ? entry.key : []), ...(Array.isArray(entry.keysecondary) ? entry.keysecondary : [])].flatMap(value => [...canonKeys(value)]));
       const isProfile = keyed.some(set => [...set].some(key => keys.has(key)));
       const text = `${entry.comment ?? ''}\n${entry.content}`;
