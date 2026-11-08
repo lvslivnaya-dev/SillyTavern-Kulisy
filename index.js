@@ -46,11 +46,16 @@ import {
   buildChroniclePrompt,
   chronicleConfig,
   normalizeChronicle,
+  eventsOn,
 } from './src/core/index.js';
+import {
+  armCue, buildDirectionPrompt, cueBadge, cueLabel, normalizeDirection, normalizeFavorites,
+  presenceAfterReply, removeCue, silenceCounts, startGeneration,
+} from './src/core/direction.js';
 import { analyzeHistoryBatch, analyzeKnowledge, analyzeMessage, discoverHistoryCharacters } from './src/integration/analyzer.js';
 import { selectKnowledgeCandidates } from './src/integration/knowledge-analysis.js';
 import { detectConflicts } from './src/integration/conflicts.js';
-import { clearRelationshipPrompt, updateCalendarPrompt, updateChroniclePrompt, updateKnowledgePrompt, updateRelationshipPrompt, updateScenePrompt } from './src/integration/prompt.js';
+import { clearRelationshipPrompt, updateCalendarPrompt, updateDirectionPrompt, updateChroniclePrompt, updateKnowledgePrompt, updateRelationshipPrompt, updateScenePrompt } from './src/integration/prompt.js';
 import { generateCalendarTemplate } from './src/integration/calendar-generation.js';
 import { buildScenePrompt, looksFit, newlyDropped } from './src/integration/world-prompt.js';
 import { createReminders, createWorldCallbacks } from './src/integration/world-actions.js';
@@ -216,6 +221,8 @@ export async function init() {
         looksCardCharacters: settings.looksCardCharacters,
         looksCharacterCharacters: settings.looksCharacterCharacters,
         itemsDormantAfter: settings.itemsDormantAfter ?? 40,
+        directorSilenceAfter: settings.director?.silenceAfter ?? 4,
+        directorHotkeys: settings.director?.hotkeys !== false,
         imageStorage: settings.imageStorage === 'folder' ? 'folder' : 'server',
         largeChangeThreshold: settings.largeChangeThreshold,
         chronicle: structuredClone(settings.chronicle ?? {}),
@@ -504,6 +511,15 @@ export async function init() {
     }
   }
 
+  /** The chat's stage cues (core/direction.js), tidy. */
+  function directionState(source = state) {
+    return normalizeDirection(source.ui?.direction, Object.keys(source.entities ?? {}));
+  }
+
+  async function saveDirection(next) {
+    await commit({ ...state, ui: { ...state.ui, direction: next } }, true);
+  }
+
   function chronicleState() {
     return normalizeChronicle(state.ui?.chronicle);
   }
@@ -528,6 +544,10 @@ export async function init() {
       ? buildCalendarPrompt(state, { flashback: Boolean(state.world?.clock?.flashback) }) : '';
     calendarTokens = calendarBlock ? countTokens(calendarBlock) : 0;
     updateCalendarPrompt(ctx, calendarBlock);
+    // Stage directions («пнуть»): only the cues in force for this reply.
+    try {
+      updateDirectionPrompt(ctx, settings.enabled ? buildDirectionPrompt(state, directionState(), { presentIds: presentIds(state) }) : '');
+    } catch (error) { console.error('[Kulisy] Direction prompt failed.', error); }
     // Knowledge has its own switch, so it is sent even with the relationship block off.
     const knowledge = buildKnowledgeText(state);
     knowledgeTokens = knowledge ? countTokens(knowledge) : 0;
@@ -681,6 +701,12 @@ export async function init() {
       if (!Object.hasOwn(patch, key)) continue;
       const value = Math.round(Number(patch[key]));
       if (Number.isFinite(value)) settings[key] = Math.max(min, Math.min(max, value));
+    }
+    settings.director ??= {};
+    if (Object.hasOwn(patch, 'directorHotkeys')) settings.director.hotkeys = Boolean(patch.directorHotkeys);
+    if (Object.hasOwn(patch, 'directorSilenceAfter')) {
+      const value = Math.round(Number(patch.directorSilenceAfter));
+      if (Number.isFinite(value)) settings.director.silenceAfter = Math.max(0, Math.min(50, value));
     }
     if (Object.hasOwn(patch, 'imageStorage')) settings.imageStorage = patch.imageStorage === 'folder' ? 'folder' : 'server';
     if (patch.aux && typeof patch.aux === 'object') settings.aux = normalizeAux({ ...settings.aux, ...patch.aux });
@@ -2715,6 +2741,13 @@ ${card.personality ?? card.data?.personality ?? ''}`;
     // The corrections were for this reply: they are done.
     if (reminders.list().length) { reminders.clear(); refreshPrompt(); }
     if (settings.autoAnalyze) enqueueAnalysis(messageIndex);
+    // «Позвать» / «Увести»: the reply brought someone on or sent them off. After the analysis,
+    // bound to this reply, so a swipe or a deletion takes it back.
+    const moves = presenceAfterReply(directionState());
+    if (moves.add.length || moves.remove.length || moves.cast || moves.place) {
+      analysisQueue = analysisQueue.then(() => applyCuePresence(Number(messageIndex), moves))
+        .catch(error => logEvent('warn', 'Пинок: присутствие не записано', error));
+    }
     // The chronicle writes in the background, after the analysis of this reply is queued.
     if (settings.enabled && chronicleConfig(settings.chronicle).enabled) analysisQueue.then(() => chronicleRunner.run()).catch(() => {});
   });
@@ -2743,6 +2776,87 @@ ${card.personality ?? card.data?.personality ?? ''}`;
       .catch(error => console.error('[Kulisy] Message reconciliation failed.', error));
   });
 
+  async function applyCuePresence(messageIndex, { add, remove, cast = null, place = null }) {
+    const ctx = SillyTavern.getContext();
+    const message = ctx.chat?.[messageIndex];
+    if (!message || message.is_user) return;
+    const before = presentIds(state);
+    // A new scene with its people chosen: exactly them; otherwise who came and who left.
+    const ids = new Set(cast ?? before);
+    for (const id of add) if (state.entities[id] && !isDead(state, id)) ids.add(id);
+    for (const id of remove) ids.delete(id);
+    const payload = { presentIds: [...ids].filter(id => state.entities[id] && !isDead(state, id)) };
+    if (place) {
+      const known = place.locationId && (state.world?.locations ?? []).some(location => location.id === place.locationId);
+      if (known) payload.locationId = place.locationId;
+      if (place.location) payload.location = place.location;
+    }
+    const scene = state.knowledge?.scene ?? {};
+    const samePeople = payload.presentIds.length === before.length && before.every(id => payload.presentIds.includes(id));
+    const samePlace = !place || ((payload.locationId ?? scene.locationId ?? '') === (scene.locationId ?? '') && (payload.location ?? scene.location ?? '') === (scene.location ?? ''));
+    if (samePeople && samePlace) return;
+    message.extra ??= {};
+    const marker = (message.extra[MESSAGE_EXTRA_KEY] ??= {});
+    const operation = createOperation('scene.set', payload, {
+      transactionId: marker.transactionId ?? uniqueId('cue'), messageId: String(messageIndex), messageIndex,
+      id: uniqueId('analysis'), reason: place || cast ? 'Новая сцена: место и кто в ней' : 'Пинок: кто пришёл и ушёл', timestamp: new Date().toISOString(),
+    });
+    marker.operationIds = [...(marker.operationIds ?? []), operation.id];
+    await commit(applyOperation(state, operation), true);
+    try { await ctx.saveChat?.(); } catch (error) { logEvent('warn', 'Пинок: чат не сохранён', error); }
+  }
+
+  /** What the scene drawer offers for one character (chat-overlay.js describe). */
+  function describeForDirector(id) {
+    const entity = state.entities[id];
+    if (!entity) return null;
+    const personaId = state.ui?.personaId || '';
+    const here = presentIds(state);
+    const nameOf = other => state.entities[other]?.name ?? other;
+    const short = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+    // side 'in': the line A→this one — its factors are what THIS one does that moves A.
+    // side 'out': this one's own line →B — its factors are moments with B that move THIS one;
+    // the kick makes them open to such a moment (B may be the persona: nobody acts for her).
+    const lines = Object.values(state.relationships)
+      .filter(relation => relation.factors?.length && relation.from !== personaId
+        && ((relation.to === id && state.entities[relation.from]) || (relation.from === id && state.entities[relation.to])))
+      .map(relation => ({
+        side: relation.to === id ? 'in' : 'out',
+        targetId: relation.to === id ? relation.from : relation.to,
+        targetName: nameOf(relation.to === id ? relation.from : relation.to),
+        factors: relation.factors.map(factor => {
+          const text = String(factor.text ?? '').trim();
+          const first = text.split('\n')[0].replace(/:$/, '').trim();
+          return { label: short(first, 48), text: text.replace(/\s*\n\s*/g, ' ').slice(0, 400) };
+        }).filter(factor => factor.text),
+      }))
+      .filter(line => line.factors.length);
+    const secrets = (state.knowledge?.events ?? [])
+      .filter(event => event.secret && !event.disabled && howKnows(state, id, event))
+      .map(event => {
+        const label = String(event.text ?? '').trim();
+        const detail = String(event.detail ?? '').trim();
+        return { eventId: event.id, label: short(label, 40), text: [label, detail].filter(Boolean).join(' — ').slice(0, 400) };
+      })
+      .filter(secret => secret.label);
+    return {
+      name: entity.name,
+      persona: id === personaId,
+      present: here.includes(id),
+      reactTargets: here.filter(other => other !== id).map(other => ({ id: other, name: nameOf(other) })),
+      lines,
+      secrets,
+    };
+  }
+
+  /** Today's calendar events, offered as ready scene events. */
+  function eventIdeasForDirector() {
+    const calendar = calendarOf();
+    const today = dateOfDay(calendar, state.world?.clock?.day ?? 0);
+    if (!today) return [];
+    return eventsOn(calendar, today).map(event => [event.time, event.title].filter(Boolean).join(' ')).filter(Boolean).slice(0, 6);
+  }
+
   const messageButtons = mountMessageButtons(index => { runManualCheck(index); });
 
   /** Chips: everyone on stage, plus whoever the last messages mention (likely to come on). */
@@ -2751,10 +2865,37 @@ ${card.personality ?? card.data?.personality ?? ''}`;
     const personaId = state.ui?.personaId || '';
     const here = new Set(presentIds(state));
     const nearby = mentionedEntities(state, recentSceneText(SillyTavern.getContext().chat, 3, 4000));
-    const ids = [...new Set([...here, ...nearby])].filter(id => state.entities[id] && !isDead(state, id));
+    const direction = directionState();
+    const cueIds = direction.cues.map(cue => cue.entityId).filter(Boolean);
+    const ids = [...new Set([...here, ...nearby, ...cueIds])].filter(id => state.entities[id] && !isDead(state, id));
+    const chat = SillyTavern.getContext().chat ?? [];
+    let silent = new Map();
+    try {
+      silent = silenceCounts(chat.map(message => ({ isUser: Boolean(message?.is_user), text: message?.is_system ? '' : message?.mes })),
+        [...here].filter(id => id !== personaId), text => mentionedEntities(state, text));
+    } catch (error) { console.error('[Kulisy] Silence count failed.', error); }
+    const nameOf = id => state.entities[id]?.name ?? id;
+    const director = settings.director ?? {};
     return {
-      chips: enabled && settings.sceneChips !== false,
-      cast: ids.map(id => ({ id, name: state.entities[id].name, present: here.has(id), persona: id === personaId })),
+      chips: settings.enabled && settings.sceneChips !== false,
+      cast: ids.map(id => ({ id, name: state.entities[id].name, present: here.has(id), persona: id === personaId, silent: silent.get(id) ?? 0 })),
+      director: {
+        open: director.open === true,
+        silenceAfter: Math.max(0, Math.round(Number(director.silenceAfter ?? 4)) || 0),
+        hotkeys: director.hotkeys !== false,
+        canKick: !isGenerationActive(),
+        favorites: normalizeFavorites(settings.directionFavorites),
+        cues: direction.cues.map(cue => ({ id: cue.id, kind: cue.kind, entityId: cue.entityId ?? '', label: cueLabel(cue, nameOf), badge: cueBadge(cue), used: cue.used, wait: cue.wait })),
+        // For «🎬 Сцена»: the chat's places and everyone who can be in a scene.
+        places: (state.world?.locations ?? []).filter(location => !location.off).map(location => ({ id: location.id, name: location.name })),
+        people: Object.values(state.entities).filter(entity => !isDead(state, entity.id))
+          .map(entity => ({ id: entity.id, name: entity.name, persona: entity.id === personaId, present: here.has(entity.id) }))
+          .sort((left, right) => Number(right.present) - Number(left.present) || left.name.localeCompare(right.name, 'ru')),
+        others: Object.values(state.entities)
+          .filter(entity => !ids.includes(entity.id) && entity.id !== personaId && !isDead(state, entity.id))
+          .map(entity => ({ id: entity.id, name: entity.name }))
+          .sort((left, right) => left.name.localeCompare(right.name, 'ru')),
+      },
       location: state.knowledge?.scene?.location ?? '',
       // Time and, when the calendar knows it, the date: «14:20 · вт 8 апр».
       time: settings.trackWorld !== false ? [state.world?.clock?.time ?? '', shortDate(dateOfDay(calendarOf(), state.world?.clock?.day ?? 0))].filter(Boolean).join(' · ') : '',
@@ -2784,6 +2925,40 @@ ${card.personality ?? card.data?.personality ?? ''}`;
         .catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы'));
     },
     onOpenStudio: tab => (tab ? studio.show(tab) : studio.open()),
+    onCue: async cue => {
+      try {
+        if (!settings.enabled) throw new Error('Кулисы выключены.');
+        await saveDirection(armCue(directionState(), { ...cue, id: uniqueId('cue') }, Object.keys(state.entities)));
+        return true;
+      } catch (error) {
+        globalThis.toastr?.error?.(error.message, 'Кулисы');
+        return false;
+      }
+    },
+    onRemoveCue: cueId => saveDirection(removeCue(directionState(), cueId))
+      .catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
+    onKickNow: () => {
+      if (isGenerationActive()) { globalThis.toastr?.info?.('Сейчас идёт генерация — пинок уйдёт со следующей.', 'Кулисы'); return; }
+      // Exactly like the send button: her text goes too, an empty field means a reply without a post.
+      const send = document.getElementById('send_but');
+      if (send) send.click();
+      else Promise.resolve(SillyTavern.getContext().generate?.('normal')).catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы'));
+    },
+    onToggleOpen: open => {
+      settings.director ??= {};
+      settings.director.open = Boolean(open);
+      context.saveSettingsDebounced();
+      refreshChatOverlay();
+    },
+    onFavorite: (text, add) => {
+      const current = normalizeFavorites(settings.directionFavorites);
+      settings.directionFavorites = normalizeFavorites(add ? [text, ...current] : current.filter(item => item !== text));
+      context.saveSettingsDebounced();
+      if (add) globalThis.toastr?.success?.('Сохранено в избранные пинки', 'Кулисы');
+      refreshChatOverlay();
+    },
+    describe: describeForDirector,
+    eventIdeas: eventIdeasForDirector,
   });
   refreshChatOverlay = () => chatOverlay.render(overlayView());
   for (const type of [events.CHARACTER_MESSAGE_RENDERED, events.MORE_MESSAGES_LOADED, events.CHAT_CHANGED, events.MESSAGE_SWIPED, events.MESSAGE_UPDATED, events.MESSAGE_DELETED]) {
@@ -2831,6 +3006,11 @@ ${card.personality ?? card.data?.personality ?? ''}`;
   // so headcanons are picked for the scene that is about to be written.
   globalThis.kulisyInterceptor = async (chat, contextSize, abort, type) => {
     if (type === 'quiet' || !controller) return;
+    // Stage cues: a new turn burns the last one's and puts the armed ones in force.
+    try {
+      const started = startGeneration(directionState(), type);
+      if (started.changed) await saveDirection(started.direction);
+    } catch (error) { console.error('[Kulisy] Stage cues were not updated.', error); }
     await prepareHeadcanons(chat);
     refreshPrompt();
     // Summarized messages leave SillyTavern's prompt copy; the chronicle block stands in for them.

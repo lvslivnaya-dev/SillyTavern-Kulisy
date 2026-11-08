@@ -1,4 +1,4 @@
-import { CALENDAR_PROMPT_KEY, CHRONICLE_PROMPT_KEY, KNOWLEDGE_PROMPT_KEY, PROMPT_KEY, SCENE_PROMPT_KEY } from './settings.js';
+import { CALENDAR_PROMPT_KEY, CHRONICLE_PROMPT_KEY, DIRECTION_PROMPT_KEY, KNOWLEDGE_PROMPT_KEY, PROMPT_KEY, SCENE_PROMPT_KEY } from './settings.js';
 
 /** extension_prompt_types.IN_PROMPT: after the story string, before the chat history. */
 const POSITION_IN_PROMPT = 0;
@@ -21,6 +21,19 @@ export function clearRelationshipPrompt(context) {
   updateChroniclePrompt(context, '');
   updateScenePrompt(context, '');
   updateCalendarPrompt(context, '');
+  updateDirectionPrompt(context, '');
+}
+
+/**
+ * Stage directions for the coming reply (core/direction.js), already wrapped; '' removes them.
+ * Depth 0: right after the last message, where the model reads them as the freshest instruction.
+ */
+export function updateDirectionPrompt(context, block) {
+  try {
+    context.setExtensionPrompt(DIRECTION_PROMPT_KEY, block || '', POSITION_IN_CHAT, 0, false, ROLE_SYSTEM);
+  } catch (error) {
+    console.error('[Kulisy] Failed to update the direction prompt.', error);
+  }
 }
 
 /** The calendar block arrives already wrapped (buildCalendarPrompt); '' removes it. */

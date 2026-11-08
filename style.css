@@ -16,23 +16,124 @@
 .mes[is_user="true"] .kulisy-check,
 .mes[is_system="true"] .kulisy-check { display: none; }
 
-/* Who is on stage: chips above the message box. */
+/* The scene drawer above the message box: a slim bar, opened it stays until its arrow. */
 #ku-scene-chips {
+  margin: 0 6px 6px;
+  border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 80%, transparent);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 92%, transparent);
+  backdrop-filter: blur(var(--SmartThemeBlurStrength, 10px));
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--SmartThemeShadowColor) 40%, transparent);
+  font-size: calc(var(--mainFontSize) * 0.85);
+  color: var(--SmartThemeBodyColor);
+  overflow: hidden;
+}
+#ku-scene-chips .ku-dir-head {
   display: flex;
   align-items: center;
   gap: 6px;
-  flex-wrap: wrap;
-  padding: 4px 8px 6px;
-  font-size: calc(var(--mainFontSize) * 0.85);
+  min-height: 34px;
+  padding: 3px 8px;
+  overflow: hidden;
 }
-#ku-scene-chips .ku-chips-label {
-  border: 0;
-  background: transparent;
-  color: color-mix(in srgb, var(--SmartThemeBodyColor) 65%, transparent);
+#ku-scene-chips:not(.open) .ku-dir-head { cursor: pointer; }
+#ku-scene-chips:not(.open) .ku-dir-head:hover { background: color-mix(in srgb, var(--SmartThemeBodyColor) 5%, transparent); }
+#ku-scene-chips.open .ku-dir-head { flex-wrap: wrap; border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 50%, transparent); }
+#ku-scene-chips .ku-dir-arrow {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 22%, transparent);
+  background: color-mix(in srgb, var(--SmartThemeQuoteColor) 12%, transparent);
+  color: var(--SmartThemeBodyColor);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+#ku-scene-chips .ku-dir-arrow:hover { background: color-mix(in srgb, var(--SmartThemeQuoteColor) 26%, transparent); }
+#ku-scene-chips .ku-dir-summary { display: flex; gap: 10px; min-width: 0; overflow: hidden; white-space: nowrap; opacity: .85; }
+#ku-scene-chips .ku-dir-name { display: inline-flex; align-items: center; gap: 3px; }
+#ku-scene-chips .ku-dir-tools { display: flex; gap: 6px; margin-left: auto; }
+/* The body slides like a blind: grid rows 0fr → 1fr. */
+#ku-scene-chips .ku-dir-body { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .25s ease; }
+#ku-scene-chips.open .ku-dir-body { grid-template-rows: 1fr; }
+#ku-scene-chips .ku-dir-inner { min-height: 0; overflow: hidden; }
+#ku-scene-chips.open .ku-dir-inner { max-height: 45vh; overflow-y: auto; padding: 6px 8px 8px; display: grid; gap: 8px; }
+#ku-scene-chips .ku-dir-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+#ku-scene-chips .ku-dir-caption { color: color-mix(in srgb, var(--SmartThemeBodyColor) 60%, transparent); }
+#ku-scene-chips .ku-dir-gap { margin-left: 8px; }
+#ku-scene-chips .ku-dir-btn,
+#ku-scene-chips .ku-dir-seg,
+#ku-scene-chips .ku-dir-fav-text {
+  min-height: 28px;
+  padding: 2px 10px;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 20%, transparent);
+  background: color-mix(in srgb, var(--SmartThemeBodyColor) 6%, transparent);
+  color: var(--SmartThemeBodyColor);
   font: inherit;
   cursor: pointer;
-  padding: 2px 4px;
 }
+#ku-scene-chips .ku-dir-btn:hover,
+#ku-scene-chips .ku-dir-seg:hover,
+#ku-scene-chips .ku-dir-fav-text:hover { background: color-mix(in srgb, var(--SmartThemeQuoteColor) 18%, transparent); }
+#ku-scene-chips .ku-dir-btn.on,
+#ku-scene-chips .ku-dir-seg.on {
+  border-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 70%, transparent);
+  background: color-mix(in srgb, var(--SmartThemeQuoteColor) 24%, transparent);
+}
+#ku-scene-chips .ku-dir-kick {
+  border-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 70%, transparent);
+  background: color-mix(in srgb, var(--SmartThemeQuoteColor) 30%, transparent);
+  font-weight: 600;
+}
+#ku-scene-chips .ku-dir-add { border-style: dashed; }
+#ku-scene-chips .ku-dir-seg { border-radius: 20px; padding: 2px 9px; }
+#ku-scene-chips .ku-dir-card {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor) 40%, transparent);
+  background: color-mix(in srgb, var(--SmartThemeQuoteColor) 7%, transparent);
+}
+#ku-scene-chips .ku-dir-card-head { display: flex; align-items: baseline; gap: 8px; }
+#ku-scene-chips .ku-dir-sub {
+  padding-top: 6px;
+  border-top: 1px dashed color-mix(in srgb, var(--SmartThemeBodyColor) 18%, transparent);
+  display: grid;
+  gap: 6px;
+}
+#ku-scene-chips .ku-dir-row.ku-dir-sub { display: flex; }
+#ku-scene-chips .ku-dir-field { flex-wrap: nowrap; }
+#ku-scene-chips .ku-dir-input { flex: 1; min-width: 0; margin: 0; }
+#ku-scene-chips .ku-dir-textarea { width: 100%; box-sizing: border-box; resize: vertical; min-height: 4em; font: inherit; }
+#ku-scene-chips .ku-dir-select { width: auto; max-width: 45%; margin: 0; }
+#ku-scene-chips .ku-dir-fav,
+#ku-scene-chips .ku-dir-tag { display: inline-flex; align-items: center; gap: 2px; }
+#ku-scene-chips .ku-dir-tag {
+  padding: 2px 4px 2px 10px;
+  border-radius: 20px;
+  border: 1px solid color-mix(in srgb, var(--SmartThemeQuoteColor) 55%, transparent);
+  background: color-mix(in srgb, var(--SmartThemeQuoteColor) 14%, transparent);
+}
+#ku-scene-chips .ku-dir-tag.used { border-style: dashed; opacity: .8; }
+#ku-scene-chips .ku-dir-fav-del {
+  border: 0;
+  background: transparent;
+  color: color-mix(in srgb, var(--SmartThemeBodyColor) 60%, transparent);
+  font: inherit;
+  cursor: pointer;
+  padding: 0 6px;
+}
+#ku-scene-chips .ku-dir-fav-del:hover { color: var(--SmartThemeBodyColor); }
+#ku-scene-chips .ku-chip-badge { font-size: .9em; }
+#ku-scene-chips .ku-chip-badge.used { opacity: .55; }
+#ku-scene-chips .ku-chip.selected { outline: 2px solid var(--SmartThemeQuoteColor); outline-offset: 1px; }
+#ku-scene-chips .ku-chip.sleepy { opacity: .7; }
+#ku-scene-chips button:focus-visible { outline: 2px solid var(--SmartThemeQuoteColor); outline-offset: 1px; }
+@media (prefers-reduced-motion: reduce) { #ku-scene-chips .ku-dir-body { transition: none; } }
 #ku-scene-chips .ku-chip {
   display: inline-flex;
   align-items: center;

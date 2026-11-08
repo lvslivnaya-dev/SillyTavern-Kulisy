@@ -12,6 +12,8 @@ export const CHRONICLE_PROMPT_KEY = 'kulisy-chronicle';
 export const SCENE_PROMPT_KEY = 'kulisy-scene';
 /** Extension prompt key of the story calendar (today's events, what is coming). */
 export const CALENDAR_PROMPT_KEY = 'kulisy-calendar';
+/** The user's stage directions («пнуть» a character) for the coming reply only. */
+export const DIRECTION_PROMPT_KEY = 'kulisy-direction';
 
 export const DEFAULT_SETTINGS = Object.freeze({
   enabled: true,
@@ -72,8 +74,14 @@ export const DEFAULT_SETTINGS = Object.freeze({
     hideSummarized: true,
     maxPromptCharacters: 6000,
   },
-  // Chips above the message box: who is on stage.
+  // The scene panel above the message box: who is on stage, and the stage directions («пнуть»).
   sceneChips: true,
+  // The panel is a drawer: open stays open until its arrow is clicked. silenceAfter: replies
+  // without a word from someone on stage before their chip shows 💤 (0 = never).
+  // hotkeys: Alt+1…9 kicks the n-th character on stage.
+  director: { open: false, silenceAfter: 4, hotkeys: true },
+  // Saved custom cues («пусть приревнует»), shared by all chats.
+  directionFavorites: [],
   // Auxiliary model for the extension's own requests (see llm.js). The key of the
   // 'custom' mode is stored here, in SillyTavern's extension settings.
   aux: {
