@@ -9,14 +9,16 @@ export const NAV_GROUPS = Object.freeze([
   Object.freeze({ id: 'scene', title: 'Сцена', items: Object.freeze([
     ['scene', 'Сейчас', 'stage'],
     ['characters', 'Персонажи', 'people'],
-    ['leaks', 'Проверка', 'alert'],
+    ['persona', 'Персона', 'eyeoff'],
     ['chronicle', 'Хроника', 'scroll'],
     ['events', 'События', 'list'],
+    ['secrets', 'Секреты', 'lock'],
   ]) }),
   Object.freeze({ id: 'world', title: 'Мир', items: Object.freeze([
     ['places', 'Локации', 'pin'],
     ['items', 'Вещи', 'bag'],
     ['wardrobe', 'Гардероб', 'shirt'],
+    ['calendar', 'Календарь', 'calendar'],
   ]) }),
   Object.freeze({ id: 'relations', title: 'Отношения', items: Object.freeze([
     ['overview', 'Обзор пар', 'heart'],
@@ -28,6 +30,7 @@ export const NAV_GROUPS = Object.freeze([
   Object.freeze({ id: 'system', title: 'Система', items: Object.freeze([
     ['journal', 'История', 'history'],
     ['lorebooks', 'Лорбуки', 'book'],
+    ['leaks', 'Проверка', 'alert'],
     ['settings', 'Настройки', 'gear'],
   ]) }),
 ]);

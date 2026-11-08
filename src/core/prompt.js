@@ -75,8 +75,8 @@ export function selectRuntimePrompt(state, options = {}) {
     const tensions = compactItems(relation.tensions, tensionLimit);
     if (memories) fields.push(`mem=${memories}`);
     if (tensions) fields.push(`ten=${tensions}`);
-    const factors = options.includeFactors === false ? '' : (relation.factors || []).slice(0, 4)
-      .map(factor => `${factor.direction === 'down' ? '-' : '+'}${factor.scaleId}: ${factor.text}`).join(' | ');
+    const factors = options.includeFactors === false ? '' : (relation.factors || []).slice(0, 6)
+      .map(factor => `${factor.direction === 'down' ? '-' : '+'}${factor.scaleId}: ${clip(String(factor.text).replace(/\s*\n\s*/g, ' '), 140)}`).join(' | ');
     if (factors) fields.push(`grow[${factors.trim()}]`);
     if (options.includeFactors !== false && relation.goal) fields.push(`endpoint=${clip(relation.goal, 400)}`);
     relationLines.push(fields.filter(Boolean).join(';'));
@@ -108,7 +108,11 @@ export function selectRuntimePrompt(state, options = {}) {
 
   const ruleLines = [];
   // Who has not met whom lives in the knowledge block (knowledge-prompt.js), with the persona rule.
+  // options.sceneIds: who is in the coming scene. A triangle is sent only when two of its three are there.
+  const sceneIds = options.sceneIds ? new Set(options.sceneIds) : null;
   for (const triangle of state.ui?.triangles ?? []) {
+    if (triangle.resolved) continue;
+    if (sceneIds && [triangle.centerId, triangle.firstId, triangle.secondId].filter(id => sceneIds.has(id)).length < 2) continue;
     const base = `triangle center=${state.entities[triangle.centerId]?.name}; others=${[triangle.firstId, triangle.secondId].map(id => state.entities[id]?.name).join(',')}`;
     ruleLines.push(triangle.goal
       ? `${base}; long-term end point: ${clip(triangle.goal, 400)} — a distant direction, not a task for this reply: never rush, skip stages or force it; let it emerge only from earned in-story events`

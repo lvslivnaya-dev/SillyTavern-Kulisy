@@ -62,7 +62,7 @@ test('growth generation passes direction, lore and scenes; repeats are user-dire
       return JSON.stringify({ factors: [{ scaleId: 'love', direction: 'up', text: 'Тихие вечера у камина' }] });
     },
   };
-  const factors = await generateGrowthFactors(context, state, 'a', 'b', {
+  const { factors } = await generateGrowthFactors(context, state, 'a', 'b', {
     directionId: 'custom', customDirection: 'медленная романтика', loreContext: 'LORE: Leon values loyalty',
   });
   assert.equal(factors.length, 1);

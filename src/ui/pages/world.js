@@ -772,7 +772,8 @@ export const WORLD_STYLE = `
 .ku-crumbs strong{font-size:16px}
 .ku-crumb{border:0;background:transparent;color:var(--k-muted);font:inherit;cursor:pointer;padding:2px 0}
 .ku-crumb:last-child{color:var(--k-text);font-weight:700}
-.ku-chips{display:flex;gap:6px;flex-wrap:wrap}
+.ku-chips{display:flex;gap:6px;flex-wrap:wrap;min-width:0}
+.ku-chips .ku-chip{white-space:normal;overflow-wrap:anywhere;max-width:100%;border-radius:12px;line-height:1.35;text-align:left}
 .ku-now-main{flex:999 1 420px;min-width:0;display:flex;flex-direction:column;gap:10px}
 .ku-stage{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(100%,220px),1fr));gap:10px}
 .ku-actor{display:flex;flex-direction:column;gap:8px;text-align:left;padding:12px;border:1px solid var(--k-line);border-radius:14px;background:var(--k-panel);color:var(--k-text);font:inherit;cursor:pointer;min-width:0}

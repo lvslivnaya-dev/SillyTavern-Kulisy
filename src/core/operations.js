@@ -18,7 +18,7 @@ export function normalizeFactors(factors, state) {
     if (!factor || typeof factor !== 'object') continue;
     const scaleId = String(factor.scaleId ?? '');
     const direction = factor.direction === 'down' ? 'down' : 'up';
-    const text = String(factor.text ?? '').trim().slice(0, 200);
+    const text = String(factor.text ?? '').trim().slice(0, 700);
     if (!text || !state.config.scales.some(scale => scale.id === scaleId)) continue;
     const key = `${scaleId}\u0000${direction}\u0000${text.toLocaleLowerCase('ru-RU')}`;
     if (seen.has(key)) continue;

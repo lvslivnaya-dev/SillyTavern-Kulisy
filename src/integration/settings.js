@@ -10,6 +10,8 @@ export const KNOWLEDGE_PROMPT_KEY = 'kulisy-knowledge';
 export const CHRONICLE_PROMPT_KEY = 'kulisy-chronicle';
 /** The scene block (time, place, clothes, things), next to the knowledge block. */
 export const SCENE_PROMPT_KEY = 'kulisy-scene';
+/** Extension prompt key of the story calendar (today's events, what is coming). */
+export const CALENDAR_PROMPT_KEY = 'kulisy-calendar';
 
 export const DEFAULT_SETTINGS = Object.freeze({
   enabled: true,
@@ -34,6 +36,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
   trackWorld: true,
   // Send the narrator the scene block (world-prompt.js) and how big it may be.
   sendScene: true,
+  // Send the narrator the story calendar: the date, today's events and what is coming.
+  sendCalendar: true,
+  // Calendar templates, shared by all chats (core/calendar.js toTemplate).
+  calendarTemplates: [],
   scenePromptCharacters: 1500,
   // How much of each wardrobe card's description, and of all a character wears, goes into the scene.
   looksCardCharacters: 300,

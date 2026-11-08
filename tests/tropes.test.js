@@ -103,3 +103,86 @@ test('factor origin and pace survive the journal; an unknown origin is dropped',
   state = applyOperations(state, [createOperation('factors.set', { relationshipId: id, factors: relation.factors })]);
   assert.deepEqual(state.relationships[id].pace, { love: 'slow' }, 'без pace в операции темп не сбрасывается');
 });
+
+test('obsession: both sides exist, the obsessed line grows fast', async () => {
+  const { pairTropePace } = await import('../src/integration/tropes.js');
+  const ids = pairTropes().map(trope => trope.id);
+  assert.ok(ids.includes('obsession') && ids.includes('obsessed-over'));
+  assert.equal(pairTropePace('obsession', SCALES).dependency, 'fast');
+  assert.ok(pairTropeFactors('obsession', SCALES).length >= 10);
+});
+
+test('trope texts are about what the other one does, with names and genders filled in', async () => {
+  const { fillTropeText } = await import('../src/integration/tropes.js');
+  const people = { subj: { name: 'Ран', gender: 'male' }, obj: { name: 'Судзу', gender: 'female' } };
+  const texts = pairTropeFactors('protector', SCALES, people).map(factor => factor.text);
+  assert.ok(texts.includes('Судзу не пришла, когда была нужна'), texts.join('\n'));
+  assert.ok(texts.includes('Судзу защищает его без просьбы'));
+  assert.equal(fillTropeText('{obj} {o:пришёл|пришла}', { obj: 'Майки' }), 'Майки пришёл/пришла', 'gender not set: both forms');
+  assert.equal(fillTropeText('{o:был|была} рядом'), 'Был/была рядом');
+  for (const trope of pairTropes()) {
+    for (const factor of pairTropeFactors(trope.id, SCALES, people)) {
+      assert.doesNotMatch(factor.text, /\{|\}/, `${trope.id}: all placeholders filled`);
+    }
+  }
+});
+
+test('names only stand in the nominative: no placeholder right after a preposition', async () => {
+  const source = (await import('node:fs')).readFileSync(new URL('../src/integration/tropes.js', import.meta.url), 'utf8');
+  const bad = source.match(/(?:^|[\s«(])(?:с|со|к|о|об|у|для|от|без|про|над|под|при|за|на|в|из|ради|перед|после|рядом с)\s+\{(?:obj|subj|center|rival)\}/gimu) ?? [];
+  assert.deepEqual(bad, []);
+});
+
+test('triangle trope texts get each line\'s own names', () => {
+  const names = { a: { name: 'Ран', gender: 'male' }, b: { name: 'Риндо', gender: 'male' }, c: { name: 'Судзу', gender: 'female' } };
+  const { factors } = triangleTropeFactors('love-triangle', TRIANGLE, SCALES, '', id => names[id]);
+  const line = factors.find(factor => factor.from === 'a' && factor.to === 'c' && factor.scaleId === 'love');
+  assert.equal(line.text, 'Судзу выбирает его, а Риндо остаётся в стороне');
+});
+
+test('chat tempo scales every change before the line pace; a change never vanishes', async () => {
+  const { applyAnalysisResult, tempoDelta } = await import('../src/integration/analysis-operations.js');
+  assert.equal(tempoDelta(10, 'very-slow'), 3, '×0.4 = 4, capped at 3');
+  assert.equal(tempoDelta(1, 'very-slow'), 1, 'never zero');
+  assert.equal(tempoDelta(-8, 'slow'), -5);
+  assert.equal(tempoDelta(6, 'fast'), 9);
+  assert.equal(tempoDelta(6, 'normal'), 6);
+  assert.equal(tempoDelta(6, undefined), 6);
+  let state = applyOperations(createDefaultState(), [
+    createOperation('entity.upsert', { id: 'a', name: 'A' }),
+    createOperation('entity.upsert', { id: 'b', name: 'B' }),
+    createOperation('relationship.upsert', { from: 'a', to: 'b' }),
+  ]);
+  const id = Object.keys(state.relationships)[0];
+  state = applyOperations(state, [createOperation('factors.set', { relationshipId: id, factors: [], pace: { love: 'fast' } })]);
+  const result = { operations: [
+    { subjectId: 'a', objectId: 'b', metric: 'trust', delta: 10, reason: 'r' },
+    { subjectId: 'a', objectId: 'b', metric: 'love', delta: 10, reason: 'r' },
+  ] };
+  const applied = applyAnalysisResult(state, result, { messageId: '1' }, [], { linkedScales: false, tempo: 'slow' });
+  assert.equal(applied.state.relationships[id].scales.trust, 6, '10 × 0.65 = 6.5 → 7, capped at 6');
+  assert.equal(applied.state.relationships[id].scales.love, 9, 'chat slow (6) then line fast (×1.5)');
+  assert.match(applied.operations[0].reason, /темп чата: медленно/);
+});
+
+test('the analyzer may name the factor it matched; it is kept only when scale and direction agree', async () => {
+  const { applyAnalysisResult } = await import('../src/integration/analysis-operations.js');
+  let state = applyOperations(createDefaultState(), [
+    createOperation('entity.upsert', { id: 'a', name: 'A' }),
+    createOperation('entity.upsert', { id: 'b', name: 'B' }),
+    createOperation('relationship.upsert', { from: 'a', to: 'b' }),
+  ]);
+  const id = Object.keys(state.relationships)[0];
+  state = applyOperations(state, [createOperation('factors.set', { relationshipId: id, factors: [
+    { scaleId: 'trust', direction: 'up', text: 'B держит слово' },
+    { scaleId: 'fear', direction: 'up', text: 'B угрожает' },
+  ] })]);
+  const { operations } = applyAnalysisResult(state, { operations: [
+    { subjectId: 'a', objectId: 'b', metric: 'trust', delta: 3, reason: 'сдержал обещание', factor: 1 },
+    { subjectId: 'a', objectId: 'b', metric: 'respect', delta: 2, reason: 'не то', factor: 2 },
+    { subjectId: 'a', objectId: 'b', metric: 'trust', delta: -2, reason: 'не в ту сторону', factor: 1 },
+  ] }, { messageId: '1' }, [], { linkedScales: false });
+  assert.equal(operations[0].payload.factor, 'B держит слово');
+  assert.match(operations[0].reason, /по фактору: «B держит слово»/);
+  assert.equal(operations[1].payload.factor, undefined, 'another scale');
+});

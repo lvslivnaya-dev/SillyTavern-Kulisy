@@ -155,7 +155,7 @@ test('trackKnowledge off: the chronicle is ignored', () => {
 });
 
 test('materializeKnowledge with nothing to do is a no-op', () => {
-  assert.deepEqual(materializeKnowledge(null, {}), { leaks: [], deaths: [] });
+  assert.deepEqual(materializeKnowledge(null, {}), { leaks: [], deaths: [], reveals: [] });
 });
 
 function fakeModel(reply) {

@@ -178,7 +178,7 @@ export function createKnowledgePages(ctx) {
       element('div', { className: 'ku-dossier-head' }, [avatar(character, 'large'), element('div', {}, [
         element('h3', { text: characterName(character) }),
         element('span', { className: 'muted', text: id === personaId() ? 'Персона: что она знает, решаете вы; здесь видно, с кем она знакома.' : 'Досье: что знает, чего не знает и с кем знаком.' }),
-      ]), element('div', { className: 'ku-name-tools' }, [mainName(id), mergeWith(id)])]),
+      ]), element('div', { className: 'ku-name-tools' }, [mainName(id), genderSelect(id), mergeWith(id)])]),
       renderDeath(id),
       tabs,
       dossierTab === 'met' ? renderAcquaintances(id)
@@ -225,6 +225,18 @@ export function createKnowledgePages(ctx) {
       button('Отметить', 'btn primary small', save),
       button('Отмена', 'btn small', () => { deathDraftId = null; render(); }),
     ]);
+  }
+
+  /** Grammatical gender: only for the wording of trope factors («пришёл»/«пришла»). */
+  function genderSelect(id) {
+    const current = snapshot().ui?.genders?.[id] ?? '';
+    const select = element('select', { 'aria-label': 'Пол', title: 'Для текстов тропов: «пришёл» или «пришла», «его» или «её». Не указан — обе формы через косую черту.' },
+      [['', 'Пол: не указан'], ['male', 'Мужской'], ['female', 'Женский']].map(([value, text]) => element('option', { value, text, selected: value === current })));
+    select.addEventListener('change', async () => {
+      try { await ctx.facade.invoke('onSetGender', { entityId: id, gender: select.value }); setStatus('Пол сохранён'); }
+      catch (error) { setStatus(error?.message || 'Не удалось сохранить', true); }
+    });
+    return select;
   }
 
   /** «Главное имя»: which spelling the Studio shows; the others stay other names. */
@@ -469,7 +481,80 @@ export function createKnowledgePages(ctx) {
     ctx.setTab('characters');
   }
 
-  return { renderCharacters, renderEvents, renderLeaks, openDossier };
+  /**
+   * «Секреты»: every secret in one place. Who knows it (one click to change), whether the
+   * model hears it in the current scene, and the reveals waiting for an answer under replies.
+   */
+  function renderSecrets() {
+    const view = element('div', { className: 'records-view' });
+    const state = snapshot();
+    const here = present();
+    const persona = personaId();
+    const knowsOf = (event, id) => event.witnessIds.includes(id)
+      || (knowledge().learned ?? []).some(item => item.eventId === event.id && item.entityId === id && !item.disabled);
+    const scan = button('Секреты из лорбука', 'btn', async () => {
+      scan.disabled = true;
+      setStatus('Читаю секреты в лорбуках…');
+      try {
+        const result = await ctx.facade.invoke('onScanSecrets', {});
+        setStatus(result?.applied ? `Записано секретов: ${result.applied}` : result?.updated ? `Обновлён текст: ${result.updated}` : 'Новых секретов нет');
+      } catch (error) { setStatus(error?.message || 'Не удалось прочитать секреты', true); }
+      finally { scan.disabled = false; }
+    }, 'Записи лорбука с названием «[Секрет] …» или «[Секрет: Имя] …»');
+    view.append(element('div', { className: 'row' }, [scan, element('span', { className: 'muted', style: { fontSize: '12px' }, text: 'Клик по имени — знает / не знает.' })]));
+
+    const waiting = state.reveals ?? [];
+    if (waiting.length) {
+      view.append(element('div', { className: 'card ku-twins' }, [
+        element('strong', { text: `Ждут ответа · ${waiting.length}` }),
+        element('p', { className: 'muted ku-small', text: 'Летописец думает, что персонаж узнал секрет. Ответьте здесь или под сообщением.' }),
+        ...waiting.map(item => element('div', { className: 'ku-fact' }, [
+          element('span', { className: 'ku-fact-text' }, [element('strong', { text: item.name }), ` узнаёт: ${item.eventText}`, item.how ? element('span', { className: 'muted', text: ` (${item.how})` }) : null].filter(Boolean)),
+          button('Отметить', 'btn small primary', () => act('onRevealConfirm', item, 'reveal-confirm')),
+          button('Нет', 'btn small', () => act('onRevealDismiss', item, 'reveal-dismiss')),
+        ])),
+      ]));
+    }
+
+    const secrets = events().filter(event => event.secret);
+    if (!secrets.length) {
+      view.append(element('p', { className: 'muted', text: 'Секретов пока нет. Их приносят лорбук («[Секрет] …») и летописец; событие можно отметить секретом и в «Ленте событий».' }));
+      return view;
+    }
+    // Lorebook secrets first, then the newest.
+    const ordered = secrets.map((event, order) => ({ event, order }))
+      .sort((left, right) => Number(Boolean(right.event.lore)) - Number(Boolean(left.event.lore)) || right.order - left.order);
+    for (const { event } of ordered) {
+      const knowers = characters().map(characterId).filter(id => knowsOf(event, id));
+      const knowerOnStage = knowers.some(id => id !== persona && here.has(id));
+      const status = event.disabled ? 'выключен: модель его не получает'
+        : event.lore ? (knowerOnStage ? 'в сцене есть знающий: модель получает текст' : 'в сцене никто не знает: модель молчит')
+          : 'кто не знает, получает «не знает»';
+      const chips = characters().map(character => {
+        const id = characterId(character);
+        const on = knowers.includes(id);
+        const chip = button(characterName(character), `ku-chip ku-knower${on ? ' seen' : ''}`,
+          () => act('onSetSecretKnower', { eventId: event.id, entityId: id, knows: !on }, 'secret-knower'),
+          on ? `${characterName(character)} знает — убрать` : `${characterName(character)} не знает — отметить, что знает`);
+        chip.setAttribute('aria-pressed', String(on));
+        return chip;
+      });
+      const card = element('div', { className: `card ku-secret-card${event.disabled ? ' off' : ''}` }, [
+        element('div', { className: 'ku-row' }, [
+          element('strong', { text: event.text }),
+          element('span', { className: 'ku-push' }),
+          toggle(!event.disabled, 'Учитывать секрет', value => act('onToggleKnowledge', { kind: 'event', itemId: event.id, disabled: !value }, 'event-toggle')),
+        ]),
+        element('p', { className: 'muted ku-small', style: { margin: '2px 0 6px' }, text: `${event.lore ? `лорбук «${event.lore.book}»` : 'из чата'} · ${status}` }),
+        element('div', { className: 'ku-knowers' }, chips),
+      ]);
+      if (event.detail) card.append(element('details', { className: 'ku-secret-detail' }, [element('summary', { text: 'Текст секрета' }), element('p', { text: event.detail })]));
+      view.append(card);
+    }
+    return view;
+  }
+
+  return { renderCharacters, renderEvents, renderLeaks, renderSecrets, openDossier };
 }
 
 /** Styles of the knowledge pages; colours only from the theme tokens. */
@@ -513,6 +598,11 @@ export const KNOWLEDGE_STYLE = `
 .ku-chip.told{color:var(--k-accent);border-color:var(--k-accent-line)}
 .ku-chip.rumor{color:var(--k-warn);border-color:var(--k-warn);border-style:dashed}
 .ku-chip.warn{color:var(--k-warn);border-color:var(--k-warn)}
+.ku-knowers{display:flex;flex-wrap:wrap;gap:6px}
+.ku-knower{cursor:pointer;background:transparent;min-height:0}
+.ku-secret-card.off{opacity:.6}
+.ku-secret-detail summary{cursor:pointer;font-size:12px;margin-top:8px}
+.ku-secret-detail p{white-space:pre-wrap;font-size:12px;margin:6px 0 0}
 .ku-secret{color:var(--k-warn);font-weight:700}
 .ku-death{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:0 0 10px}
 .ku-death input{flex:1 1 220px;min-width:0}

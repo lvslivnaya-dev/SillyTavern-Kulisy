@@ -392,3 +392,134 @@ test('settings → data: where pictures go — install hint without the plugin; 
     studio?.destroy();
   }
 });
+
+test('secrets page: knower chips, scene status and waiting reveals', () => {
+  const base = sampleState();
+  const [ran, suzu] = Object.values(base.entities);
+  const state = applyOperations(base, [
+    createOperation('event.add', { item: { id: 'scars', text: 'Шрамы Судзу', witnessIds: [suzu.id], secret: true, lore: { book: 'Судзу', uid: 1 }, detail: 'Под одеждой шрамы' } }),
+  ]);
+  const snapshot = { ...state, pairs: base.pairs, reveals: [{ messageIndex: 3, entityId: ran.id, eventId: 'scars', name: 'Ран', eventText: 'Шрамы Судзу', how: '' }] };
+  const calls = [];
+  let studio;
+  const errors = captureErrors(() => {
+    studio = createRelationshipStudio({ store: { getSnapshot: () => snapshot }, open: true, layout: { mode: 'window', tab: 'secrets' }, callbacks: { onSetSecretKnower: payload => { calls.push(payload); } } });
+  });
+  try {
+    assert.deepEqual(errors, [], errors.join('\n'));
+    const shadow = studio.element.shadowRoot;
+    const card = shadow.querySelector('.ku-secret-card');
+    assert.ok(card, 'the secret is listed');
+    assert.match(card.textContent, /лорбук «Судзу» · в сцене никто не знает: модель молчит/);
+    assert.equal(shadow.querySelectorAll('.ku-knower[aria-pressed="true"]').length, 1, 'only Судзу knows');
+    assert.match(shadow.textContent, /Ждут ответа · 1/);
+  } finally { studio?.destroy(); }
+});
+
+test('triangle setup: every line gets its own per-scale pace editor', () => {
+  const base = sampleState();
+  const [ran, suzu, mikey] = Object.values(base.entities);
+  const snapshot = { ...base, ui: { ...base.ui, triangles: [{ id: 'tri', name: 'Тест', centerId: suzu.id, firstId: ran.id, secondId: mikey.id }] } };
+  const lines = base.pairs.map(pair => ({ relationshipId: pair.id, label: `${pair.from}→${pair.to}` }));
+  let studio;
+  const errors = captureErrors(() => {
+    studio = createRelationshipStudio({ store: { getSnapshot: () => snapshot }, open: true, layout: { mode: 'window', tab: 'triangles' }, callbacks: { onTriangleLines: () => lines, onPairTropes: () => [], onTriangleTropes: () => [] } });
+    [...studio.element.shadowRoot.querySelectorAll('button')].find(item => item.textContent === 'Цель и факторы')?.click();
+  });
+  try {
+    assert.deepEqual(errors, [], errors.join('\n'));
+    const editors = studio.element.shadowRoot.querySelectorAll('.pace-editor');
+    assert.equal(editors.length, lines.length);
+    assert.ok(editors[0].querySelectorAll('select').length >= 10, 'a select per scale');
+  } finally { studio?.destroy(); }
+});
+
+test('line factors: the model\'s reading of the pair is shown, list factors keep their lines', () => {
+  const base = sampleState();
+  const pair = base.pairs[0];
+  pair.factors = [{ scaleId: 'trust', direction: 'up', text: 'Слово:\n• держит слово\n• прикрывает\n• молчит о тайне' }];
+  const snapshot = { ...base, ui: { ...base.ui, analyses: { [pair.id]: { subject: 'Ран ценит силу.', object: 'Судзу тихая.', dynamic: 'Он старше.' } } } };
+  let studio;
+  const errors = captureErrors(() => {
+    studio = createRelationshipStudio({ store: { getSnapshot: () => snapshot }, open: true, layout: { mode: 'window', tab: 'overview' }, callbacks: { onPairTropes: () => [], onDirectionPresets: () => [] } });
+    studio.open?.();
+  });
+  try {
+    assert.deepEqual(errors, [], errors.join('\n'));
+    const shadow = studio.element.shadowRoot;
+    const open = [...shadow.querySelectorAll('button')].find(item => /Факторы роста/.test(item.textContent));
+    assert.ok(open, 'a factors button on the overview');
+    open.click();
+    const box = shadow.querySelector('.factor-analysis');
+    assert.ok(box && !box.hidden, 'analysis shown');
+    assert.match(box.textContent, /Чьи чувства: Ран ценит силу/);
+    assert.match(shadow.querySelector('.factor-row textarea').value, /\n• прикрывает\n/);
+  } finally { studio?.destroy(); }
+});
+
+test('persona page: binding and the hidden character field', () => {
+  const base = sampleState();
+  const snapshot = { ...base, personaBoundName: 'Судзу', personaAvatar: 'suzu.png', personaPrivate: 'Колючая', tavernPersonas: [{ avatarId: 'suzu.png', name: 'Судзу' }] };
+  const calls = [];
+  let studio;
+  const errors = captureErrors(() => {
+    studio = createRelationshipStudio({ store: { getSnapshot: () => snapshot }, open: true, layout: { mode: 'window', tab: 'persona' }, callbacks: { onSetPersonaPrivate: payload => { calls.push(payload); } } });
+  });
+  try {
+    assert.deepEqual(errors, [], errors.join('\n'));
+    const shadow = studio.element.shadowRoot;
+    const field = shadow.querySelector('textarea[aria-label="Скрытый характер персоны"]');
+    assert.equal(field.value, 'Колючая');
+    field.value = 'Колючая, но теряется от нежности';
+    [...shadow.querySelectorAll('button')].find(item => item.textContent === 'Сохранить').click();
+    assert.deepEqual(calls, [{ text: 'Колючая, но теряется от нежности' }]);
+    assert.ok([...shadow.querySelectorAll('.sidebar button')].some(item => item.textContent === 'Персона: Судзу'), 'the sidebar links to the page');
+  } finally { studio?.destroy(); }
+});
+
+test('calendar page: month grid with events, a day, the editor and the generator drafts', async () => {
+  const base = sampleState();
+  const snapshot = {
+    ...base,
+    world: { clock: { day: 2, time: '14:20' } },
+    calendarToday: '2025-04-08',
+    calendar: { anchor: '2025-04-07', events: [
+      { id: 'e1', title: 'Контрольная по анатомии', date: '2025-04-08', time: '10:00', repeat: 'none', must: true },
+      { id: 'e2', title: 'Анатомия', date: '2025-04-07', repeat: 'weekly', weekdays: [2, 4] },
+    ] },
+    calendarTemplates: [{ id: 't1', name: 'Ветеринар', startMonth: 4, events: [{ title: 'Сессия', date: '07-20', repeat: 'none' }] }],
+  };
+  const calls = [];
+  let studio;
+  const errors = captureErrors(() => {
+    studio = createRelationshipStudio({ store: { getSnapshot: () => snapshot }, open: true, layout: { mode: 'window', tab: 'calendar' }, callbacks: {
+      onCalendarGenerate: async () => ({ name: 'Год', startMonth: 4, events: [{ title: 'Церемония поступления', date: '04-05', repeat: 'none', must: true }] }),
+      onCalendarApplyTemplate: payload => { calls.push(payload); return Promise.resolve(1); },
+      onCalendarSaveEvent: payload => { calls.push(payload); return Promise.resolve(); },
+    } });
+  });
+  try {
+    assert.deepEqual(errors, [], errors.join('\n'));
+    const shadow = studio.element.shadowRoot;
+    assert.equal(shadow.querySelectorAll('.ku-cal-cell').length, 42);
+    assert.ok(shadow.querySelector('.ku-cal-cell.today.must'), 'today is marked, with a must event');
+    assert.match(shadow.textContent, /Апрель 2025/);
+    assert.match(shadow.textContent, /10:00 · Контрольная по анатомии/);
+    assert.match(shadow.textContent, /Сегодня в истории: вторник, 8 апреля 2025 \(день 2\)/);
+    [...shadow.querySelectorAll('button')].find(item => item.textContent === '+ Событие').click();
+    const title = shadow.querySelector('.ku-cal-editor input');
+    title.value = 'Практика';
+    title.dispatchEvent(new window.Event('input'));
+    [...shadow.querySelectorAll('.ku-cal-editor button')].find(item => item.textContent === 'Сохранить').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(calls[0].event.title, 'Практика');
+    assert.equal(calls[0].event.date, '2025-04-08');
+    [...shadow.querySelectorAll('button')].find(item => item.textContent === 'Сгенерировать').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.match(shadow.textContent, /Церемония поступления/);
+    [...shadow.querySelectorAll('button')].find(item => item.textContent === 'Добавить отмеченные в календарь').click();
+    assert.deepEqual(calls.at(-1).indexes, [0]);
+    assert.equal(Number(calls.at(-1).year), 2025);
+  } finally { studio?.destroy(); }
+});

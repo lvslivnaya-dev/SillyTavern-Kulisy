@@ -8,7 +8,8 @@
  *   learned — information reaching a character ON PAGE (told, overheard, rumour);
  *   met     — introductions;
  *   leaks   — a character acting on an event they cannot know;
- *   deaths  — a character dying on page (only proposed: the user confirms under the reply).
+ *   deaths  — a character dying on page (only proposed: the user confirms under the reply);
+ *   reveals — a LOREBOOK secret reaching someone (only proposed, like deaths).
  *
  * The model only proposes. Everything is resolved to registered characters and
  * checked against the current dossiers here before it becomes journal operations.
@@ -190,10 +191,11 @@ export function parseKnowledgeResponse(data, { knowledge = true, world = false }
  * api.state()           — the current state (changes as operations are added);
  * api.add(type, payload, reason) — journal one operation with the reply's metadata;
  * api.resolveId(ref)    — registered ID for an ID, name or alias, or null.
- * Returns { leaks, deaths }: confirmed leaks and proposed deaths for the message marker (not journaled).
+ * Returns { leaks, deaths, reveals }: for the message marker (not journaled). Lorebook secrets
+ * are never learned silently: who found out is asked under the reply.
  */
 export function materializeKnowledge(chronicle, api) {
-  if (!chronicle) return { leaks: [], deaths: [] };
+  if (!chronicle) return { leaks: [], deaths: [], reveals: [] };
   const { add, resolveId } = api;
   const resolveAll = refs => [...new Set((refs ?? []).map(resolveId).filter(Boolean))].sort();
   const now = new Date().toISOString();
@@ -235,11 +237,18 @@ export function materializeKnowledge(chronicle, api) {
   };
 
   // 3. Learned on page. Skip anyone who already knows (a witness, or told before).
+  const reveals = [];
   for (const item of chronicle.learned) {
     const event = eventFor(item.eventId);
     const entityId = resolveId(item.entityId);
     if (!event || !entityId || howKnows(api.state(), entityId, event)) continue;
     const fromId = item.fromId ? resolveId(item.fromId) : null;
+    if (event.lore) {
+      if (!reveals.some(reveal => reveal.eventId === event.id && reveal.entityId === entityId)) {
+        reveals.push({ eventId: event.id, entityId, source: item.source, ...(fromId && fromId !== entityId ? { fromId } : {}) });
+      }
+      continue;
+    }
     add('learned.add', {
       item: { id: uniqueId('learned'), eventId: event.id, entityId, source: item.source, ...(fromId && fromId !== entityId ? { fromId } : {}) },
     }, `${api.state().entities[entityId]?.name ?? entityId} узнаёт: ${event.text}`);
@@ -263,6 +272,8 @@ export function materializeKnowledge(chronicle, api) {
     const event = eventFor(item.eventId);
     const entityId = resolveId(item.entityId);
     if (!event || !entityId || howKnows(api.state(), entityId, event)) continue;
+    // Someone the reply shows finding out is a reveal to confirm, not a leak.
+    if (reveals.some(reveal => reveal.eventId === event.id && reveal.entityId === entityId)) continue;
     const key = pairKey(entityId, event.id);
     if (seen.has(key)) continue;
     seen.add(key);
@@ -276,5 +287,5 @@ export function materializeKnowledge(chronicle, api) {
     if (!entityId || isDead(api.state(), entityId) || deaths.some(death => death.entityId === entityId)) continue;
     deaths.push({ entityId, note: item.note, quote: item.quote });
   }
-  return { leaks, deaths };
+  return { leaks, deaths, reveals };
 }

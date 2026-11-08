@@ -25,6 +25,15 @@ import {
   selectRuntimePrompt,
   buildKnowledgePrompt,
   cleanSecretText,
+  anchorFor,
+  shortDate,
+  buildCalendarPrompt,
+  dateOfDay,
+  fromTemplate,
+  normalizeCalendar,
+  normalizeEvent,
+  normalizeTemplates,
+  toTemplate,
   loreSecretEvent,
   secretEntriesOf,
   stripSecretEntries,
@@ -41,7 +50,8 @@ import {
 import { analyzeHistoryBatch, analyzeKnowledge, analyzeMessage, discoverHistoryCharacters } from './src/integration/analyzer.js';
 import { selectKnowledgeCandidates } from './src/integration/knowledge-analysis.js';
 import { detectConflicts } from './src/integration/conflicts.js';
-import { clearRelationshipPrompt, updateChroniclePrompt, updateKnowledgePrompt, updateRelationshipPrompt, updateScenePrompt } from './src/integration/prompt.js';
+import { clearRelationshipPrompt, updateCalendarPrompt, updateChroniclePrompt, updateKnowledgePrompt, updateRelationshipPrompt, updateScenePrompt } from './src/integration/prompt.js';
+import { generateCalendarTemplate } from './src/integration/calendar-generation.js';
 import { buildScenePrompt, looksFit, newlyDropped } from './src/integration/world-prompt.js';
 import { createReminders, createWorldCallbacks } from './src/integration/world-actions.js';
 import { linkedCards } from './src/integration/location-links.js';
@@ -61,7 +71,7 @@ import { hideSummarized } from './src/integration/chronicle-run.js';
 import { createChronicleRunner } from './src/integration/chronicle-actions.js';
 import { getSettings } from './src/integration/settings.js';
 import { createHistoryBatches, rebuildWithoutAutomaticHistory, historyFingerprint, sampleHistory } from './src/integration/history.js';
-import { applyAnalysisResult, describeProposedChanges } from './src/integration/analysis-operations.js';
+import { applyAnalysisResult, describeProposedChanges, tempoDelta } from './src/integration/analysis-operations.js';
 import { loadLinkedLore, loadGroupLore, generationBooks, analyzeLorebookCharacters, canonKeys, namesMatch } from './src/integration/lorebooks.js';
 import { generateGrowthFactors, generatePairGoal, directionPresets, generateTriangleFactors, generateTriangleGoal, generateHeadcanons, matchingKeys } from './src/integration/growth.js';
 import { pairTropeFactors, pairTropePace, pairTropes, triangleTropeFactors, triangleTropes, tropeLabel } from './src/integration/tropes.js';
@@ -76,6 +86,7 @@ import { mountMessageButtons } from './src/integration/message-buttons.js';
 import { mountChatOverlay } from './src/integration/chat-overlay.js';
 import { scanAcquaintances } from './src/integration/acquaintance-scan.js';
 import { scanLoreSecrets } from './src/integration/secret-scan.js';
+import { guessGenders } from './src/integration/genders.js';
 import { mentionScorer, mentionedEntities, recentSceneText, semanticScorer } from './src/integration/headcanon-retrieval.js';
 import { DEFAULT_LOCAL_MODEL, LOCAL_MODELS, cosine, embedTexts } from './src/integration/embeddings.js';
 import { createChatStorage } from './src/integration/storage.js';
@@ -91,7 +102,7 @@ function messageMarker(message) {
   return message?.extra?.[MESSAGE_EXTRA_KEY] ?? message?.extra?.[LEGACY_MESSAGE_EXTRA_KEY];
 }
 /** Plain on/off preferences edited as checkboxes in the Studio settings. */
-const TOGGLE_SETTINGS = ['linkedScales', 'autoCharacterLines', 'confirmPersonaLines', 'sendMemories', 'sendTensions', 'sendFactors', 'sendHeadcanons', 'autoHeadcanons', 'trackKnowledge', 'trackWorld', 'sendScene', 'injectPrompt', 'confirmLargeChanges', 'knowledgeSeparateRequest', 'sendKnowledge', 'sceneChips'];
+const TOGGLE_SETTINGS = ['linkedScales', 'autoCharacterLines', 'confirmPersonaLines', 'sendMemories', 'sendTensions', 'sendFactors', 'sendHeadcanons', 'autoHeadcanons', 'trackKnowledge', 'trackWorld', 'sendScene', 'sendCalendar', 'injectPrompt', 'confirmLargeChanges', 'knowledgeSeparateRequest', 'sendKnowledge', 'sceneChips'];
 let controller = null;
 
 function normalizeEmbeddings(config) {
@@ -190,6 +201,8 @@ export async function init() {
       tavernPersonas: tavernList,
       chatPersonaName: chatPersona,
       personaBoundName: boundPersonaName,
+      personaAvatar: boundPersonaAvatar(),
+      personaPrivate: personaPrivateText(),
       personaMismatch: Boolean(persona && chatPersona && boundPersonaName
         && boundPersonaName.toLocaleLowerCase('ru-RU') !== chatPersona.toLocaleLowerCase('ru-RU')),
       lorebooks: { available: SillyTavern.getContext().getWorldInfoNames?.() ?? [], selected: state.ui?.linkedLorebooks ?? [], cardWorlds: cardWorldNames(), status: 'Книги подключаются только к анализатору этого чата. Исходные файлы не изменяются.' },
@@ -219,6 +232,12 @@ export async function init() {
       knowledgePreview: buildKnowledgeText(state) || '',
       leaks: openLeaks(),
       slips: openSlips(),
+      factorHits: factorHits(),
+      calendar: calendarOf(state),
+      calendarToday: dateOfDay(calendarOf(state), state.world?.clock?.day ?? 0),
+      calendarTemplates: normalizeTemplates(settings.calendarTemplates),
+      calendarTokens,
+      reveals: openReveals(),
       dossiers: Object.fromEntries(Object.keys(state.entities).map(id => [id, dossier(state, id)])),
       knowledgeTokens,
       chronicleTokens,
@@ -307,6 +326,7 @@ export async function init() {
   let knowledgeTokens = 0;
   let chronicleTokens = 0;
   let sceneTokens = 0;
+  let calendarTokens = 0;
 
   function countTokens(text) {
     try {
@@ -322,7 +342,9 @@ export async function init() {
     if (!settings.enabled || !settings.injectPrompt) return '';
     // The budget is applied per section inside selectRuntimePrompt; slicing the finished
     // text used to drop every memory, tension and stranger rule at the end.
+    const sceneIds = [...presentIds(targetState), ...mentionedEntities(targetState, recentSceneText(SillyTavern.getContext().chat, 2, 3000))];
     return selectRuntimePrompt({ ...targetState, ui: { ...targetState.ui, personaId: persona } }, {
+      sceneIds,
       memoryLimit: 2,
       tensionLimit: 2,
       includeMemories: settings.sendMemories !== false,
@@ -502,6 +524,10 @@ export async function init() {
     const sceneBlock = buildSceneText(state);
     sceneTokens = sceneBlock ? countTokens(sceneBlock) : 0;
     updateScenePrompt(ctx, sceneBlock);
+    const calendarBlock = settings.enabled && settings.sendCalendar !== false
+      ? buildCalendarPrompt(state, { flashback: Boolean(state.world?.clock?.flashback) }) : '';
+    calendarTokens = calendarBlock ? countTokens(calendarBlock) : 0;
+    updateCalendarPrompt(ctx, calendarBlock);
     // Knowledge has its own switch, so it is sent even with the relationship block off.
     const knowledge = buildKnowledgeText(state);
     knowledgeTokens = knowledge ? countTokens(knowledge) : 0;
@@ -673,7 +699,99 @@ export async function init() {
   /** Lore about these characters from every book of the chat, for generation (factors, end points, headcanons). */
   function loreAbout(ids) {
     const ctx = SillyTavern.getContext();
-    return loadGroupLore(ctx, state, ids, { books: generationBooks(ctx, state, cardWorldNames()), matchKeys: matchingKeys });
+    // The persona's own lorebook too: when the persona is one of the pair, it is the main source about her.
+    const persona = personaBookName();
+    const books = [...new Set([...generationBooks(ctx, state, cardWorldNames()), ...(persona ? [persona] : [])])];
+    return loadGroupLore(ctx, state, ids, { books, matchKeys: matchingKeys });
+  }
+
+  /** The chat's calendar, tidy (characters removed since are dropped from «who»). */
+  function calendarOf(source = state) {
+    return normalizeCalendar(source.ui?.calendar, new Set(Object.keys(source.entities ?? {})));
+  }
+
+  async function commitCalendar(change, base = state) {
+    const next = structuredClone(base);
+    next.ui ??= {};
+    next.ui.calendar = calendarOf(next);
+    change(next.ui.calendar);
+    await commit(next, true);
+    refreshPrompt();
+  }
+
+  const calendarCallbacks = {
+    /** «Сегодня в истории — 8 апреля»: the date of the current story day; the rest follows. */
+    onCalendarSetToday: ({ date }) => {
+      // An unknown story day becomes day 1: the date has to belong to some day.
+      const day = state.world?.clock?.day || 0;
+      const base = day ? state : applyOperation(state, createOperation('clock.set', { day: 1 }, {
+        transactionId: uniqueId('manual'), reason: 'День 1: дата истории задана в календаре', timestamp: new Date().toISOString(),
+      }));
+      return commitCalendar(calendar => {
+        const anchor = anchorFor(date, day || 1);
+        if (!anchor) throw new Error('Не понял дату.');
+        calendar.anchor = anchor;
+      }, base);
+    },
+    onCalendarSaveEvent: ({ event }) => commitCalendar(calendar => {
+      const clean = normalizeEvent(event, new Set(Object.keys(state.entities)));
+      if (!clean) throw new Error('У события нужны название и дата.');
+      const index = calendar.events.findIndex(item => item.id === clean.id);
+      if (index >= 0) calendar.events[index] = clean; else calendar.events.push(clean);
+    }),
+    onCalendarRemoveEvent: ({ id }) => commitCalendar(calendar => { calendar.events = calendar.events.filter(item => item.id !== id); }),
+    onCalendarClear: () => commitCalendar(calendar => { calendar.events = []; }),
+    /** A year from one line; nothing is saved, the page shows the drafts. */
+    onCalendarGenerate: async ({ description }) => {
+      if (isGenerationActive()) await waitForGenerationEnd();
+      const ctx = SillyTavern.getContext();
+      const personaId = state.ui?.personaId;
+      const lore = personaId ? (await loreAbout([personaId]).catch(() => '')).slice(0, 4000) : '';
+      return generateCalendarTemplate(routedContext(ctx, settings, 'generation'), {
+        description, personaName: personaId ? state.entities[personaId]?.name ?? '' : '', lore,
+      });
+    },
+    /** Put a template (saved or just generated) into this chat's calendar, in a year. indexes: only those events. */
+    onCalendarApplyTemplate: ({ template, templateId, year, indexes }) => {
+      const source = template ?? normalizeTemplates(settings.calendarTemplates).find(item => item.id === templateId);
+      if (!source) throw new Error('Шаблон не найден.');
+      const y = Math.round(Number(year));
+      if (!(y >= 1 && y <= 9999)) throw new Error('Укажите год.');
+      const picked = Array.isArray(indexes) ? { ...source, events: source.events.filter((_, index) => indexes.includes(index)) } : source;
+      const events = fromTemplate(picked, y, { whoForPersona: state.ui?.personaId || '' });
+      if (!events.length) throw new Error('В шаблоне нет событий с датой.');
+      return commitCalendar(calendar => { calendar.events.push(...events); }).then(() => events.length);
+    },
+    /** Save as a template: the chat's events, or the given (generated) ones. */
+    onCalendarSaveTemplate: ({ name, startMonth, events, description }) => {
+      const template = events
+        ? { ...toTemplate(name, [], startMonth, description), events: events.map(event => ({ ...event })) }
+        : toTemplate(name, calendarOf().events, startMonth, description, state.ui?.personaId || '');
+      if (!template.events.length) throw new Error('Нечего сохранять: событий нет.');
+      settings.calendarTemplates = [...normalizeTemplates(settings.calendarTemplates), template];
+      context.saveSettingsDebounced();
+      notify();
+      return template.id;
+    },
+    onCalendarRemoveTemplate: ({ id }) => {
+      settings.calendarTemplates = normalizeTemplates(settings.calendarTemplates).filter(item => item.id !== id);
+      context.saveSettingsDebounced();
+      notify();
+    },
+  };
+
+  /** How the model read the pair for the last factors of a line: shown in its «Факторы роста». */
+  async function rememberAnalysis(lineId, analysis) {
+    const next = structuredClone(state);
+    next.ui ??= {};
+    next.ui.analyses = { ...(next.ui.analyses ?? {}), [lineId]: { ...analysis, at: new Date().toISOString() } };
+    await commit(next, true);
+  }
+
+  /** { name, gender } of a character for trope texts; gender is what was set in the dossier. */
+  function personOf(id) {
+    const entity = id ? state.entities[id] : null;
+    return entity ? { name: entity.name, gender: state.ui?.genders?.[id] ?? '' } : {};
   }
 
   /** The persona's own lorebook (Persona Management → lorebook), or ''. */
@@ -1006,6 +1124,29 @@ export async function init() {
       .map(persona => ({ ...persona, lockedToChat: persona.avatarId === chatPersonaAvatar }));
   }
 
+  /** SillyTavern avatar id of the persona bound in Kulisy (its entity's source, or the same name). */
+  function boundPersonaAvatar() {
+    const entity = state.ui?.personaId ? state.entities[state.ui.personaId] : null;
+    if (!entity) return '';
+    const personas = SillyTavern.getContext().powerUserSettings?.personas ?? {};
+    if (entity.sourceId && personas[entity.sourceId]) return entity.sourceId;
+    const name = entity.name.toLocaleLowerCase('ru-RU');
+    return Object.entries(personas).find(([, value]) => String(value ?? '').trim().toLocaleLowerCase('ru-RU') === name)?.[0] ?? '';
+  }
+
+  /** The persona's hidden character: only for the factor analysis, never for the narrator or the analyzer. */
+  function personaPrivateText() {
+    const avatar = boundPersonaAvatar();
+    return avatar ? String(settings.personaPrivate?.[avatar] ?? '') : '';
+  }
+
+  /** The hidden character as the generator gets it, when the persona is one of these characters. */
+  function privateFor(ids) {
+    const personaId = state.ui?.personaId;
+    const text = personaPrivateText().trim();
+    return personaId && text && ids.includes(personaId) ? { name: state.entities[personaId]?.name ?? '', text } : null;
+  }
+
   function personaAvatarForChat() {
     const context = SillyTavern.getContext();
     const chatAvatar = context.chatMetadata?.persona ?? '';
@@ -1106,6 +1247,18 @@ export async function init() {
     return leaks.reverse();
   }
 
+  /** How often each factor moved its line: { relationshipId: { factor text: count } }, from the journal. */
+  function factorHits() {
+    const hits = {};
+    for (const operation of state.operations ?? []) {
+      const { relationshipId: id, factor } = operation.type === 'scale.delta' ? operation.payload ?? {} : {};
+      if (!id || !factor) continue;
+      hits[id] ??= {};
+      hits[id][factor] = (hits[id][factor] ?? 0) + 1;
+    }
+    return hits;
+  }
+
   /** Deaths the chronicler proposed and nobody answered yet; newest first. */
   function openDeaths(chat = SillyTavern.getContext().chat ?? []) {
     const deaths = [];
@@ -1116,6 +1269,31 @@ export async function init() {
       }
     });
     return deaths.reverse();
+  }
+
+  /** Lorebook secrets the chronicler thinks someone found out; still unanswered. Newest first. */
+  function openReveals(chat = SillyTavern.getContext().chat ?? []) {
+    const reveals = [];
+    chat.forEach((message, messageIndex) => {
+      for (const reveal of message?.extra?.[MESSAGE_EXTRA_KEY]?.reveals ?? []) {
+        const event = (state.knowledge?.events ?? []).find(item => item.id === reveal.eventId);
+        if (!event || !state.entities[reveal.entityId] || howKnows(state, reveal.entityId, event)) continue;
+        reveals.push({
+          messageIndex, entityId: reveal.entityId, eventId: event.id, name: state.entities[reveal.entityId].name, eventText: event.text,
+          how: reveal.source === 'rumor' ? 'слух' : reveal.fromId && state.entities[reveal.fromId] ? `рассказал(а) ${state.entities[reveal.fromId].name}` : '',
+        });
+      }
+    });
+    return reveals.reverse();
+  }
+
+  async function forgetReveal(messageIndex, entityId, eventId) {
+    const ctx = SillyTavern.getContext();
+    const marker = ctx.chat?.[messageIndex]?.extra?.[MESSAGE_EXTRA_KEY];
+    if (!marker?.reveals) return;
+    marker.reveals = marker.reveals.filter(reveal => !(reveal.entityId === entityId && reveal.eventId === eventId));
+    if (!marker.reveals.length) delete marker.reveals;
+    await ctx.saveChat();
   }
 
   async function forgetDeath(messageIndex, entityId) {
@@ -1213,6 +1391,21 @@ export async function init() {
         item: { id: uniqueId('learned'), eventId, entityId, source: source === 'rumor' ? 'rumor' : 'told', ...(fromId ? { fromId } : {}) },
       }, `${state.entities[entityId].name} знает: ${event.text}`);
     },
+    /** The secrets page: one click says who knows. Lorebook secrets keep knowers as witnesses. */
+    onSetSecretKnower: async ({ eventId, entityId, knows }) => {
+      const event = requireEvent(eventId);
+      requireCharacter(entityId);
+      const name = state.entities[entityId].name;
+      const how = howKnows(state, entityId, event);
+      if (knows && !how) {
+        if (event.lore) await manualKnowledge('event.update', { eventId, changes: { witnessIds: [...event.witnessIds, entityId] } }, `${name} знает секрет: ${event.text}`);
+        else await manualKnowledge('learned.add', { item: { id: uniqueId('learned'), eventId, entityId, source: 'told' } }, `${name} знает секрет: ${event.text}`);
+      } else if (!knows && how) {
+        if (how.source === 'seen') await manualKnowledge('event.update', { eventId, changes: { witnessIds: event.witnessIds.filter(id => id !== entityId) } }, `${name} не знает секрет: ${event.text}`);
+        else if (how.learnedId) await manualKnowledge('learned.remove', { learnedId: how.learnedId }, `${name} не знает секрет: ${event.text}`);
+      }
+      refreshPrompt();
+    },
     onRemoveLearned: async ({ learnedId }) => {
       await manualKnowledge('learned.remove', { learnedId }, 'Знание убрано вручную');
     },
@@ -1256,6 +1449,32 @@ export async function init() {
       await commit(applyOperation(state, operation), true);
       await forgetDeath(messageIndex, entityId);
       refreshPrompt();
+      notify();
+    },
+    /** From the plaque: the secret is learned with that message, so deleting it takes this back. */
+    onRevealConfirm: async ({ messageIndex, entityId, eventId }) => {
+      const event = requireEvent(eventId);
+      requireCharacter(entityId);
+      const ctx = SillyTavern.getContext();
+      const marker = ctx.chat?.[messageIndex]?.extra?.[MESSAGE_EXTRA_KEY];
+      const proposal = marker?.reveals?.find(reveal => reveal.entityId === entityId && reveal.eventId === eventId);
+      if (!marker || !proposal) throw new Error('Отметка уже снята.');
+      if (!howKnows(state, entityId, event)) {
+        const operation = createOperation('learned.add', {
+          item: { id: uniqueId('learned'), eventId, entityId, source: proposal.source === 'rumor' ? 'rumor' : 'told', ...(proposal.fromId ? { fromId: proposal.fromId } : {}) },
+        }, {
+          transactionId: marker.transactionId ?? uniqueId('reveal'), messageId: String(messageIndex), messageIndex,
+          id: uniqueId('analysis'), reason: `${state.entities[entityId].name} узнаёт секрет: ${event.text}`, timestamp: new Date().toISOString(),
+        });
+        marker.operationIds = [...(marker.operationIds ?? []), operation.id];
+        await commit(applyOperation(state, operation), true);
+      }
+      await forgetReveal(messageIndex, entityId, eventId);
+      refreshPrompt();
+      notify();
+    },
+    onRevealDismiss: async ({ messageIndex, entityId, eventId }) => {
+      await forgetReveal(messageIndex, entityId, eventId);
       notify();
     },
     onDeathDismiss: async ({ messageIndex, entityId }) => {
@@ -1429,6 +1648,8 @@ export async function init() {
           try { books.push(await ctx.loadWorldInfo(name)); } catch (error) { logEvent('warn', `Лорбук «${name}» не прочитан для других имён`, error); }
         }
         if (epoch !== chatEpoch) return 0;
+        await fillGenders(books).catch(error => logEvent('warn', 'Пол по лорбуку не определился', error));
+        if (epoch !== chatEpoch) return 0;
         const operations = aliasOperations(state, aliasesFromBooks(state, books));
         if (!operations.length) return 0;
         await commit(applyOperations(state, operations), true);
@@ -1441,6 +1662,32 @@ export async function init() {
       } finally { aliasRun = null; }
     })();
     return aliasRun;
+  }
+
+  /**
+   * Empty genders from the characters' own lore (profile entries, the card, the persona
+   * description), by pronouns, no model request. A gender chosen in the dossier stays.
+   */
+  async function fillGenders(books) {
+    const ctx = SillyTavern.getContext();
+    const extra = {};
+    const cards = ctx.groupId
+      ? ((ctx.groups ?? []).find(item => String(item.id) === String(ctx.groupId))?.members ?? []).map(avatar => (ctx.characters ?? []).find(character => character?.avatar === avatar)).filter(Boolean)
+      : (ctx.characters?.[ctx.characterId] ? [ctx.characters[ctx.characterId]] : []);
+    for (const card of cards) {
+      const entity = Object.values(state.entities).find(item => namesMatch(item.name, card.name));
+      if (entity) extra[entity.id] = `${card.description ?? card.data?.description ?? ''}
+${card.personality ?? card.data?.personality ?? ''}`;
+    }
+    const personaId = state.ui?.personaId;
+    if (personaId) extra[personaId] = String(ctx.powerUserSettings?.persona_description ?? '');
+    const guesses = guessGenders(state, books, extra);
+    if (!Object.keys(guesses).length) return;
+    const next = structuredClone(state);
+    next.ui ??= {};
+    next.ui.genders = { ...(next.ui.genders ?? {}), ...guesses };
+    await commit(next, true);
+    logEvent('info', `Пол по лорбуку: ${Object.entries(guesses).map(([id, gender]) => `${state.entities[id]?.name ?? id} — ${gender === 'female' ? 'ж' : 'м'}`).join(', ')}`);
   }
 
   /** The user said these two are different people: never offered as twins again. */
@@ -1493,6 +1740,7 @@ export async function init() {
     onSetMainName: ({ entityId, name }) => setMainName(entityId, name),
     onAliasesFromLore: () => enrichAliases(),
     ...knowledgeCallbacks,
+    ...calendarCallbacks,
     ...libraryCallbacks,
     ...chronicleRunner.callbacks,
     ...worldCallbacks,
@@ -1515,6 +1763,26 @@ export async function init() {
       next.ui ??= {};
       next.ui.triangles ??= [];
       next.ui.triangles.push({ id: uniqueId('triangle'), name: name || 'Треугольник', centerId, firstId, secondId });
+      await commit(next, true);
+    },
+    /** «Выбор сделан»: chosenId — the side the center chose; null reopens the triangle. */
+    onResolveTriangle: async ({ id, chosenId }) => {
+      const next = structuredClone(state);
+      const triangle = (next.ui?.triangles ?? []).find(item => item.id === id);
+      if (!triangle) throw new Error('Треугольник не найден.');
+      if (chosenId) {
+        if (![triangle.firstId, triangle.secondId].includes(chosenId)) throw new Error('Выбрать можно только одну из сторон.');
+        triangle.resolved = { chosenId, at: new Date().toISOString() };
+      } else delete triangle.resolved;
+      await commit(next, true);
+      refreshPrompt();
+    },
+    /** Rival's jealousy when the center grows closer to the other side in front of them. */
+    onSetTriangleEcho: async ({ id, enabled }) => {
+      const next = structuredClone(state);
+      const triangle = (next.ui?.triangles ?? []).find(item => item.id === id);
+      if (!triangle) throw new Error('Треугольник не найден.');
+      if (enabled) delete triangle.noEcho; else triangle.noEcho = true;
       await commit(next, true);
     },
     onRemoveTriangle: async ({ id }) => {
@@ -1542,13 +1810,13 @@ export async function init() {
       const triangle = findTriangle(id);
       const lines = triangleLines(triangle);
       const loreContext = await loreAbout([triangle.centerId, triangle.firstId, triangle.secondId]);
-      const factors = await generateTriangleFactors(routedContext(SillyTavern.getContext(), settings, 'generation'), state, triangle, lines, { goal: goal ?? triangle.goal, loreContext });
+      const factors = await generateTriangleFactors(routedContext(SillyTavern.getContext(), settings, 'generation'), state, triangle, lines, { goal: goal ?? triangle.goal, loreContext, cardText: cardContext(SillyTavern.getContext()), personaPrivate: privateFor([triangle.centerId, triangle.firstId, triangle.secondId]) });
       return withLineIds(factors);
     },
     onTriangleTropes: () => triangleTropes(),
     onTriangleTropeFactors: ({ id, tropeId }) => {
       const triangle = findTriangle(id);
-      const result = triangleTropeFactors(tropeId, triangle, state.config.scales.map(scale => scale.id), state.ui?.personaId || '');
+      const result = triangleTropeFactors(tropeId, triangle, state.config.scales.map(scale => scale.id), state.ui?.personaId || '', personOf);
       return { goal: result.goal, factors: withLineIds(result.factors).map(factor => ({ ...factor, origin: `triangle-trope:${tropeId}` })) };
     },
     /** Saves the combined editor: every tracked line of the triangle gets exactly the listed factors
@@ -1572,14 +1840,76 @@ export async function init() {
     },
     onPairTropes: () => pairTropes(),
     /** origin marks a line's own trope; the triangle editor re-labels it as a triangle trope. */
-    onPairTropeFactors: ({ tropeId }) => {
+    /** sourceId/targetId or relationshipId: the line whose names and genders go into the texts. */
+    onPairTropeFactors: ({ tropeId, sourceId, targetId, relationshipId: lineId }) => {
       const scaleIds = state.config.scales.map(scale => scale.id);
+      const line = lineId ? state.relationships[lineId] : null;
+      const people = { subj: personOf(line?.from ?? sourceId), obj: personOf(line?.to ?? targetId) };
       return {
-        factors: pairTropeFactors(tropeId, scaleIds).map(factor => ({ ...factor, origin: `pair-trope:${tropeId}` })),
+        factors: pairTropeFactors(tropeId, scaleIds, people).map(factor => ({ ...factor, origin: `pair-trope:${tropeId}` })),
         pace: pairTropePace(tropeId, scaleIds),
       };
     },
     onTropeLabel: ({ origin }) => tropeLabel(origin),
+    onSetPersonaPrivate: ({ text }) => {
+      const avatar = boundPersonaAvatar();
+      if (!avatar) throw new Error('Сначала привяжите персону.');
+      settings.personaPrivate = { ...(settings.personaPrivate ?? {}) };
+      const value = String(text ?? '').trim().slice(0, 4000);
+      if (value) settings.personaPrivate[avatar] = value; else delete settings.personaPrivate[avatar];
+      context.saveSettingsDebounced();
+      notify();
+    },
+    /**
+     * A trope written for this line by the model from the lorebook: the trope's themes are the
+     * skeleton. Nothing is saved here (the dialog saves). relationshipId or sourceId/targetId.
+     */
+    onTropeFactorsFromLore: async ({ tropeId, sourceId, targetId, relationshipId: lineId }) => {
+      if (isGenerationActive()) await waitForGenerationEnd();
+      const line = lineId ? state.relationships[lineId] : null;
+      const from = line?.from ?? sourceId;
+      const to = line?.to ?? targetId;
+      requireCharacter(from);
+      requireCharacter(to);
+      const scaleIds = state.config.scales.map(scale => scale.id);
+      const meta = pairTropes().find(item => item.id === tropeId);
+      if (!meta) throw new Error('Троп не найден.');
+      const trope = { ...meta, factors: pairTropeFactors(tropeId, scaleIds, { subj: personOf(from), obj: personOf(to) }) };
+      const loreContext = await loreAbout([from, to]);
+      const { factors, analysis } = await generateGrowthFactors(routedContext(SillyTavern.getContext(), settings, 'generation'), state, from, to, {
+        loreContext, cardText: cardContext(SillyTavern.getContext()), personaPrivate: privateFor([from, to]), trope, goal: state.relationships[relationshipId(from, to)]?.goal ?? '',
+      });
+      if (analysis) await rememberAnalysis(relationshipId(from, to), analysis);
+      return { factors: factors.map(factor => ({ ...factor, origin: `pair-trope:${tropeId}` })), pace: pairTropePace(tropeId, scaleIds), analysis };
+    },
+    /** The same for a triangle trope: all lines at once, from the lore of the three. */
+    onTriangleTropeFromLore: async ({ id, tropeId, goal }) => {
+      if (isGenerationActive()) await waitForGenerationEnd();
+      const triangle = findTriangle(id);
+      const skeleton = triangleTropeFactors(tropeId, triangle, state.config.scales.map(scale => scale.id), state.ui?.personaId || '', personOf);
+      const meta = triangleTropes().find(item => item.id === tropeId);
+      const loreContext = await loreAbout([triangle.centerId, triangle.firstId, triangle.secondId]);
+      const factors = await generateTriangleFactors(routedContext(SillyTavern.getContext(), settings, 'generation'), state, triangle, triangleLines(triangle), {
+        goal: goal || triangle.goal || skeleton.goal, loreContext, cardText: cardContext(SillyTavern.getContext()), personaPrivate: privateFor([triangle.centerId, triangle.firstId, triangle.secondId]), trope: { ...meta, factors: skeleton.factors },
+      });
+      return { goal: skeleton.goal, factors: withLineIds(factors).map(factor => ({ ...factor, origin: `triangle-trope:${tropeId}` })) };
+    },
+    /** The chat's tempo of relationships (analysis-operations TEMPOS). */
+    onSetTempo: async ({ tempo }) => {
+      const next = structuredClone(state);
+      next.ui ??= {};
+      if (['very-slow', 'slow', 'fast'].includes(tempo)) next.ui.tempo = tempo; else delete next.ui.tempo;
+      await commit(next, true);
+    },
+    /** Grammatical gender for trope texts: 'male' | 'female' | '' (not set). */
+    onSetGender: async ({ entityId, gender }) => {
+      requireCharacter(entityId);
+      const next = structuredClone(state);
+      next.ui ??= {};
+      next.ui.genders = { ...(next.ui.genders ?? {}) };
+      if (gender === 'male' || gender === 'female') next.ui.genders[entityId] = gender; else delete next.ui.genders[entityId];
+      await commit(next, true);
+    },
     onRefreshLorebooks: () => notify(),
     onLinkLorebook: async ({ name }) => {
       if (!(SillyTavern.getContext().getWorldInfoNames?.() ?? []).includes(name)) throw new Error('Лорбук не найден. Обновите список.');
@@ -1624,9 +1954,10 @@ export async function init() {
       const id = relationshipId(sourceId, targetId);
       if (!state.relationships[id]) throw new Error('Сначала создайте линию.');
       const loreContext = await loreAbout([sourceId, targetId]);
-      const factors = await generateGrowthFactors(routedContext(SillyTavern.getContext(), settings, 'generation'), state, sourceId, targetId, {
-        directionId, customDirection, loreContext, goal: goal ?? state.relationships[id].goal ?? '',
+      const { factors, analysis } = await generateGrowthFactors(routedContext(SillyTavern.getContext(), settings, 'generation'), state, sourceId, targetId, {
+        directionId, customDirection, loreContext, cardText: cardContext(SillyTavern.getContext()), personaPrivate: privateFor([sourceId, targetId]), goal: goal ?? state.relationships[id].goal ?? '',
       });
+      if (analysis) await rememberAnalysis(id, analysis);
       const merged = replace ? factors : [...(state.relationships[id].factors ?? []), ...factors];
       await commit(applyOperation(state, createOperation('factors.set', {
         relationshipId: id, factors: merged, ...(goal !== undefined ? { goal } : {}),
@@ -2016,10 +2347,13 @@ export async function init() {
 
   /** Returns the operations to apply: all, only the small ones, or null when cancelled. */
   async function confirmLargeChanges(operations) {
-    const isLarge = item => Math.abs(Number(item.delta)) >= settings.largeChangeThreshold;
+    // A jump is judged after the chat's tempo: on «очень медленно» +12 becomes +3 and is not a jump.
+    const tempo = state.ui?.tempo ?? 'normal';
+    const isLarge = item => Math.abs(tempoDelta(Number(item.delta), tempo)) >= settings.largeChangeThreshold;
     if (!settings.confirmLargeChanges || !operations.some(isLarge)) return operations;
     const smallOnly = operations.filter(item => !isLarge(item));
-    const rows = describeProposedChanges(state, operations, settings.largeChangeThreshold).map(change => {
+    const shown = operations.map(item => ({ ...item, delta: tempoDelta(Number(item.delta), tempo) }));
+    const rows = describeProposedChanges(state, shown, settings.largeChangeThreshold).map(change => {
       const sign = change.delta > 0 ? '+' : '';
       const line = `${escapeHtml(change.from)} → ${escapeHtml(change.to)}: ${escapeHtml(change.scale)} ${sign}${change.delta}`;
       return `<li style="margin:4px 0">${change.large ? `<b>${line}</b>` : line}${change.reason ? `<br><small>${escapeHtml(change.reason)}</small>` : ''}</li>`;
@@ -2150,11 +2484,12 @@ export async function init() {
     if (!allowNewPair) return skip('анализ отменён');
     if (isStale()) return skip('чат или текст сообщения изменились');
     const applied = applyAnalysisResult(next, result, { transactionId, messageId: String(messageIndex), messageIndex }, acceptedNewCharacters,
-      { linkedScales: settings.linkedScales !== false, allowNewPair, headcanonKeys, trackKnowledge: Boolean(knowledge), trackWorld, library: locationLibrary.get(), wardrobe: wardrobeStore.get() });
+      { linkedScales: settings.linkedScales !== false, tempo: state.ui?.tempo ?? 'normal', allowNewPair, headcanonKeys, trackKnowledge: Boolean(knowledge), trackWorld, library: locationLibrary.get(), wardrobe: wardrobeStore.get() });
     next = applied.state;
     const operations = applied.operations;
     const leaks = applied.leaks ?? [];
     const deaths = applied.deaths ?? [];
+    const reveals = applied.reveals ?? [];
     const slips = applied.slips ?? [];
     for (const death of deaths) {
       logEvent('warn', `${label}: похоже, ${next.entities[death.entityId]?.name ?? death.entityId} умирает${death.note ? ` (${death.note})` : ''}${death.quote ? `: «${death.quote}»` : ''}`);
@@ -2171,7 +2506,7 @@ export async function init() {
       next = { ...next, ui: { ...next.ui, headcanons: added.headcanons } };
       headcanonIds.push(...added.ids);
     }
-    if (!operations.length && !headcanonIds.length && !leaks.length && !deaths.length && !slips.length) return skip('модель не нашла изменений');
+    if (!operations.length && !headcanonIds.length && !leaks.length && !deaths.length && !reveals.length && !slips.length) return skip('модель не нашла изменений');
     message.extra ??= {};
     message.extra[MESSAGE_EXTRA_KEY] = {
       fingerprint: textHash,
@@ -2182,6 +2517,8 @@ export async function init() {
       ...(leaks.length ? { leaks } : {}),
       // A death is only proposed: the plaque under the reply asks, the answer is journaled with this message.
       ...(deaths.length ? { deaths } : {}),
+      // A lorebook secret reaching someone is asked too: «Отметить» journals it with this message.
+      ...(reveals.length ? { reveals } : {}),
       // Continuity slips (clothes, things, time, place) of this text, for the plaque under it.
       ...(slips.length ? { slips } : {}),
       analyzedAt: new Date().toISOString(),
@@ -2419,9 +2756,13 @@ export async function init() {
       chips: enabled && settings.sceneChips !== false,
       cast: ids.map(id => ({ id, name: state.entities[id].name, present: here.has(id), persona: id === personaId })),
       location: state.knowledge?.scene?.location ?? '',
-      time: settings.trackWorld !== false ? (state.world?.clock?.time ?? '') : '',
+      // Time and, when the calendar knows it, the date: «14:20 · вт 8 апр».
+      time: settings.trackWorld !== false ? [state.world?.clock?.time ?? '', shortDate(dateOfDay(calendarOf(), state.world?.clock?.day ?? 0))].filter(Boolean).join(' · ') : '',
       leaks: enabled ? openLeaks() : [],
       deaths: enabled ? openDeaths() : [],
+      reveals: enabled ? openReveals() : [],
+      secrets: enabled ? (state.knowledge?.events ?? []).filter(event => event.secret && !event.disabled).length : 0,
+      waitingReveals: enabled ? openReveals().length : 0,
       slips: settings.enabled && settings.trackWorld !== false ? openSlips() : [],
     };
   }
@@ -2431,6 +2772,8 @@ export async function init() {
     onTogglePresent: (id, present) => knowledgeCallbacks.onTogglePresent({ characterId: id, present })
       .catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
     onLeak: (action, payload) => knowledgeCallbacks[LEAK_ACTIONS[action]]?.(payload)
+      .catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
+    onReveal: (action, payload) => knowledgeCallbacks[action === 'confirm' ? 'onRevealConfirm' : 'onRevealDismiss'](payload)
       .catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
     onDeath: (action, payload) => knowledgeCallbacks[action === 'confirm' ? 'onDeathConfirm' : 'onDeathDismiss'](payload)
       .catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),

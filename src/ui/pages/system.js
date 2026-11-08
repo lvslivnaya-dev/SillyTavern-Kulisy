@@ -253,10 +253,20 @@ export function createSystemPages(ctx) {
     ];
   }
 
+  function tempoSelect() {
+    const current = ctx.snapshot.ui?.tempo ?? 'normal';
+    const select = element('select', { 'aria-label': 'Темп отношений в этом чате' },
+      [['very-slow', 'Очень медленно'], ['slow', 'Медленно'], ['normal', 'Обычно'], ['fast', 'Быстро']]
+        .map(([value, text]) => element('option', { value, text, selected: value === current })));
+    select.addEventListener('change', () => act('onSetTempo', { tempo: select.value }, 'tempo'));
+    return select;
+  }
+
   function sectionRelations(current) {
     return [
       heading('Отношения'),
       list(
+        settingRow('Темп отношений в этом чате', tempoSelect(), 'Насколько сильно каждый ответ двигает шкалы. Очень медленно — ×0,4 и не больше ±3 за ответ, медленно — ×0,65 и не больше ±6, быстро — ×1,5. Изменение не пропадает совсем: минимум ±1. Темп шкалы в «Факторах роста» линии действует поверх этого.'),
         switchRow('Связанные шкалы', 'linkedScales', 'Доверие тянет за собой дружбу и т. п. Выключите, если хотите менять каждую шкалу только по прямым уликам.', current),
         switchRow('Новые линии между персонажами', 'autoCharacterLines', 'Анализатор сам заводит линию, когда двое впервые взаимодействуют.', current),
         switchRow('Спрашивать перед линией к персоне', 'confirmPersonaLines', '', current),
@@ -285,6 +295,7 @@ export function createSystemPages(ctx) {
       list(
         switchRow('Летописец сцены', 'trackWorld', 'Время (24 ч), место, одежда, состояние и вещи. Закреплённое вручную не меняется.', current),
         switchRow('Сцена в промпт', 'sendScene', 'Только тех, кто на сцене.', current),
+        switchRow('Календарь в промпт', 'sendCalendar', 'Дата истории, события сегодняшнего дня и то, что скоро. Нужна дата истории в «Мир → Календарь».', current),
         switchRow('Сообщать, если одежда не влезла', 'looksWarning', 'Всплывающее сообщение, когда описания из гардероба у кого-то на сцене перестают влезать в объём сцены: один раз, и снова — только если они влезли, а потом опять нет.', current),
         settingRow('Объём сцены, символов', numberInput('Объём сцены', current.scenePromptCharacters ?? 1500, 300, 6000, value => change({ scenePromptCharacters: value })), 'Не влезает — первыми уходят описание места и мелкие вещи.'),
         settingRow('Описание одной вещи, символов', numberInput('Описание одной вещи', current.looksCardCharacters ?? 300, 80, 1000, value => change({ looksCardCharacters: value })), 'Сколько от описания каждой карточки гардероба уходит модели. Дальше — обрезается; что обрезано, видно в «Проверке» и в досье.'),

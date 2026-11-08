@@ -1,6 +1,7 @@
 import { applyOperation, createEntity, createOperation, isDead, relationshipId, uniqueId } from '../core/index.js';
 import { coupledDeltas } from './coupling.js';
 import { materializeKnowledge } from './knowledge-analysis.js';
+import { presentIds } from '../core/knowledge.js';
 import { confirmSlips, materializeClock, materializePlace, materializeSceneLocation, materializeWorldRest } from './world-analysis.js';
 
 function normalizedName(value) {
@@ -8,14 +9,85 @@ function normalizedName(value) {
 }
 
 const SLOW_LIMIT = 2;
+export const TEMPO_LABELS = Object.freeze({ 'very-slow': 'очень медленно', slow: 'медленно', normal: 'обычно', fast: 'быстро' });
 const FAST_FACTOR = 1.5;
 
-/** A line's pace for one scale, set by a trope: slow caps a change, fast amplifies it. */
+/**
+ * The chat's tempo: every scale change is scaled before the line's own pace.
+ * A change never vanishes completely (at least ±1), so very slow still moves.
+ */
+export const TEMPOS = Object.freeze({
+  'very-slow': { factor: 0.4, cap: 3 },
+  slow: { factor: 0.65, cap: 6 },
+  normal: { factor: 1, cap: Infinity },
+  fast: { factor: 1.5, cap: 25 },
+});
+
+export function tempoDelta(delta, tempo) {
+  const value = Number(delta);
+  const rule = TEMPOS[tempo];
+  if (!value || !rule || tempo === 'normal') return value;
+  return Math.sign(value) * Math.min(rule.cap, Math.max(1, Math.round(Math.abs(value) * rule.factor)));
+}
+
+/** A line's pace for one scale (a trope or set by hand): slow caps a change, fast amplifies it. */
 export function pacedDelta(delta, pace) {
   const value = Number(delta);
   if (pace === 'slow') return Math.sign(value) * Math.min(SLOW_LIMIT, Math.abs(value));
   if (pace === 'fast') return Math.sign(value) * Math.min(25, Math.round(Math.abs(value) * FAST_FACTOR));
   return value;
+}
+
+const WARM = new Set(['love', 'attraction', 'affection']);
+
+/**
+ * Triangles: when the center and one side grow closer (love, attraction, affection up on
+ * either of their lines) and the other side is in the scene, that rival's jealousy toward
+ * this side rises by half the step (1–4). Not when the rival is away (they did not see it),
+ * is the persona (their feelings are the user's), already got a jealousy change toward this
+ * side from the analyzer, or the triangle is resolved or has the echo switched off.
+ */
+export function triangleEcho(api, operations, options = {}) {
+  const state = api.state();
+  const personaId = state.ui?.personaId || '';
+  const here = new Set(presentIds(state));
+  const steps = new Map(); // "rival|side" → { value, triangle }
+  for (const triangle of state.ui?.triangles ?? []) {
+    if (triangle.resolved || triangle.noEcho) continue;
+    for (const operation of operations) {
+      if (operation.type !== 'scale.delta' || !WARM.has(operation.payload.scaleId) || !(operation.payload.value > 0)) continue;
+      const relation = state.relationships[operation.payload.relationshipId];
+      if (!relation) continue;
+      const pair = [relation.from, relation.to];
+      if (!pair.includes(triangle.centerId)) continue;
+      const side = pair.find(id => id !== triangle.centerId);
+      if (side !== triangle.firstId && side !== triangle.secondId) continue;
+      const rival = side === triangle.firstId ? triangle.secondId : triangle.firstId;
+      if (rival === personaId || !here.has(rival)) continue;
+      const already = operations.some(item => item.type === 'scale.delta' && item.payload.scaleId === 'jealousy'
+        && state.relationships[item.payload.relationshipId]?.from === rival && state.relationships[item.payload.relationshipId]?.to === side);
+      if (already) continue;
+      const value = Math.min(4, Math.max(1, Math.ceil(operation.payload.value / 2)));
+      const key = `${rival}|${side}`;
+      if ((steps.get(key)?.value ?? 0) < value) steps.set(key, { value, triangle });
+    }
+  }
+  for (const [key, { value, triangle }] of steps) {
+    const [rival, side] = key.split('|');
+    const current = api.state();
+    if (!current.config.scales.some(scale => scale.id === 'jealousy')) return;
+    const id = relationshipId(rival, side);
+    if (!current.relationships[id]) {
+      if (options.allowNewPair && !options.allowNewPair(rival, side)) continue;
+      api.add('relationship.upsert', { from: rival, to: side }, 'Связь появилась из-за треугольника');
+    }
+    const relation = api.state().relationships[id];
+    if (!relation || (relation.hiddenScales ?? []).includes('jealousy')) continue;
+    const delta = pacedDelta(value, relation.pace?.jealousy);
+    const name = entityId => current.entities[entityId]?.name ?? entityId;
+    api.add('scale.delta', { relationshipId: id, scaleId: 'jealousy', value: delta },
+      `Ревность третьего: ${name(rival)} видит, как ${name(side)} и ${name(triangle.centerId)} сближаются (треугольник «${triangle.name}»)`);
+  }
 }
 
 /** Human-readable list of proposed scale changes for the confirmation popup.
@@ -45,7 +117,8 @@ export function describeProposedChanges(state, operations, threshold) {
  * acceptedNewCharacters: entries from result.newCharacters that the user confirmed;
  * operations may reference them by scene name, which is mapped to the new stable ID.
  * options.linkedScales: false disables spills into related scales.
- * options.allowNewPair(subjectId, objectId): false skips everything that would create a new line. */
+ * options.allowNewPair(subjectId, objectId): false skips everything that would create a new line.
+ * options.tempo: the chat's tempo (TEMPOS), applied before each line's pace. */
 export function applyAnalysisResult(state, result, metadata = {}, acceptedNewCharacters = [], options = {}) {
   let next = state;
   const personaId = state.ui?.personaId || '';
@@ -107,7 +180,10 @@ export function applyAnalysisResult(state, result, metadata = {}, acceptedNewCha
     const id = ensurePair(subjectId, objectId);
     if (!id) continue;
     if ((next.relationships[id].hiddenScales ?? []).includes(metric)) continue;
-    resolved.push({ id, metric, delta: Number(proposed.delta), reason: proposed.reason });
+    // The analyzer may name the factor it matched; it counts only if scale and direction agree.
+    const factor = Number.isInteger(Number(proposed.factor)) ? (next.relationships[id].factors ?? [])[Number(proposed.factor) - 1] : null;
+    const matched = factor && factor.scaleId === metric && (factor.direction === 'down') === (Number(proposed.delta) < 0) ? factor.text : '';
+    resolved.push({ id, metric, delta: Number(proposed.delta), reason: proposed.reason, factor: matched });
   }
   const evidenced = new Map();
   for (const change of resolved) {
@@ -116,10 +192,13 @@ export function applyAnalysisResult(state, result, metadata = {}, acceptedNewCha
   }
   for (const change of resolved) {
     const pace = next.relationships[change.id].pace ?? {};
-    const delta = pacedDelta(change.delta, pace[change.metric]);
+    const tempo = TEMPOS[options.tempo] && options.tempo !== 'normal' ? options.tempo : '';
+    const delta = pacedDelta(tempoDelta(change.delta, tempo), pace[change.metric]);
     if (!delta) continue;
-    const paceNote = delta !== change.delta ? ` (темп: ${pace[change.metric] === 'slow' ? 'медленно' : 'быстро'}, ${change.delta > 0 ? '+' : ''}${change.delta} → ${delta > 0 ? '+' : ''}${delta})` : '';
-    add('scale.delta', { relationshipId: change.id, scaleId: change.metric, value: delta }, `${change.reason}${paceNote}`);
+    const reasons = [tempo ? `темп чата: ${TEMPO_LABELS[tempo]}` : '', pace[change.metric] ? `темп шкалы: ${pace[change.metric] === 'slow' ? 'медленно' : 'быстро'}` : ''].filter(Boolean);
+    const paceNote = delta !== change.delta ? ` (${reasons.join(', ')}, ${change.delta > 0 ? '+' : ''}${change.delta} → ${delta > 0 ? '+' : ''}${delta})` : '';
+    add('scale.delta', { relationshipId: change.id, scaleId: change.metric, value: delta, ...(change.factor ? { factor: change.factor } : {}) },
+      `${change.reason}${paceNote}${change.factor ? ` · по фактору: «${change.factor}»` : ''}`);
     if (options.linkedScales === false) continue;
     const hidden = new Set(next.relationships[change.id].hiddenScales ?? []);
     const available = new Set(next.config.scales.map(scale => scale.id).filter(scaleId => !hidden.has(scaleId)));
@@ -171,12 +250,14 @@ export function applyAnalysisResult(state, result, metadata = {}, acceptedNewCha
   if (world) materializeClock(world, api);
   let leaks = [];
   let deaths = [];
+  let reveals = [];
   if (result.knowledge && options.trackKnowledge !== false) {
-    ({ leaks, deaths = [] } = materializeKnowledge(result.knowledge, { ...api, locationId }));
+    ({ leaks, deaths = [], reveals = [] } = materializeKnowledge(result.knowledge, { ...api, locationId }));
   } else if (locationId) {
     materializeSceneLocation(api, locationId);
   }
   if (world) materializeWorldRest(world, api, locationId ?? next.knowledge?.scene?.locationId);
+  if (options.triangleEcho !== false) triangleEcho(api, operations, options);
   const slips = world ? confirmSlips(world, api, beforeWorld) : [];
-  return { state: next, operations, headcanons, leaks, deaths, slips };
+  return { state: next, operations, headcanons, leaks, deaths, reveals, slips };
 }

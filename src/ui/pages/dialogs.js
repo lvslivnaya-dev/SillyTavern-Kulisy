@@ -70,12 +70,15 @@ export function createDialogs(ctx) {
     }
     renderRows();
     const paceBox = element('div', { className: 'pace-box' });
+    // Every line of the triangle gets the same per-scale editor as a single line.
     function renderPace() {
-      paceBox.replaceChildren(...lines.filter(line => Object.keys(paceByLine[line.relationshipId] ?? {}).length).map(line =>
-        element('div', { className: 'pace-line' }, paceControls(paceByLine[line.relationshipId], () => {
-          paceByLine[line.relationshipId] = {};
+      paceBox.replaceChildren(...lines.map(line => {
+        const pair = (ctx.snapshot.pairs || []).find(item => pairId(item) === line.relationshipId);
+        return pair ? paceEditor(pair, paceByLine[line.relationshipId] ?? {}, next => {
+          paceByLine[line.relationshipId] = next;
           renderPace();
-        }, `Темп ${line.label}`))));
+        }, line.label) : null;
+      }).filter(Boolean));
     }
     renderPace();
     const addRow = button('+ Добавить фактор', 'btn', () => {
@@ -105,7 +108,9 @@ export function createDialogs(ctx) {
     };
     tropeSelect.addEventListener('change', describeTrope);
     describeTrope();
-    const applyTrope = button('Применить троп', 'btn', () => {
+    // The model writes the trope for these three from the lorebook; the template is the fallback.
+    const applyTrope = button('Применить троп', 'btn', async () => {
+      applyTrope.disabled = true;
       try {
         const [kind, tropeId] = tropeSelect.value.split(':');
         const wanted = kind === 'p' && targetSelect.value ? [targetSelect.value] : lines.map(line => line.relationshipId);
@@ -113,13 +118,26 @@ export function createDialogs(ctx) {
         const targets = new Set(wanted.filter(id => !ownTrope(id)));
         let additions = [];
         let suggestedGoal = '';
+        let fallbackNote = '';
+        setSheetStatus('Пишу троп под этих персонажей по лорбуку…');
         if (kind === 't') {
-          const result = facade.invoke('onTriangleTropeFactors', { id: triangle.id, tropeId });
+          let result;
+          try { result = await facade.invoke('onTriangleTropeFromLore', { id: triangle.id, tropeId, goal: goal.value.trim() }); }
+          catch (error) {
+            fallbackNote = ` Модель не ответила (${error?.message || error}), поставлен шаблон.`;
+            result = facade.invoke('onTriangleTropeFactors', { id: triangle.id, tropeId });
+          }
           additions = (result?.factors ?? []).filter(factor => targets.has(factor.relationshipId));
           suggestedGoal = result?.goal ?? '';
         } else {
-          const result = facade.invoke('onPairTropeFactors', { tropeId });
           for (const id of targets) {
+            // One request per line: each gets its own characters' lore and names.
+            let result;
+            try { result = await facade.invoke('onTropeFactorsFromLore', { tropeId, relationshipId: id }); }
+            catch (error) {
+              fallbackNote = ` Модель не ответила (${error?.message || error}), где-то поставлен шаблон.`;
+              result = facade.invoke('onPairTropeFactors', { tropeId, relationshipId: id });
+            }
             additions.push(...(result?.factors ?? []).map(factor => ({ ...factor, relationshipId: id, origin: `triangle-trope:${tropeId}` })));
             paceByLine[id] = { ...(result?.pace ?? {}) };
           }
@@ -134,8 +152,9 @@ export function createDialogs(ctx) {
         const skippedNote = skipped.length
           ? ` Пропущены линии со своим тропом (он важнее): ${skipped.map(id => `${lineLabel(id)} — «${facade.invoke('onTropeLabel', { origin: ownTrope(id) })}»`).join('; ')}. Чтобы сменить им троп, откройте «Факторы роста» линии.`
           : '';
-        setSheetStatus(`Добавлено факторов: ${added}${suggestedGoal && goal.value === suggestedGoal ? ', цель подставлена' : ''}.${skippedNote} Проверьте и нажмите «Сохранить».`);
+        setSheetStatus(`Добавлено факторов: ${added}${suggestedGoal && goal.value === suggestedGoal ? ', цель подставлена' : ''}.${fallbackNote}${skippedNote} Проверьте и нажмите «Сохранить».`);
       } catch (error) { setSheetStatus(error?.message || 'Не удалось применить троп', true); }
+      finally { applyTrope.disabled = false; }
     });
 
     const generateFactors = button('Сгенерировать факторы (заменит список)', 'btn', async () => {
@@ -188,6 +207,8 @@ export function createDialogs(ctx) {
     return sheet;
   }
 
+  const paceEditorOpen = new Set(); // lines whose pace editor is unfolded
+
   function scaleLabel(scaleId) {
     return metricDefinitions(ctx.snapshot).find(definition => definition.key === scaleId)?.label ?? scaleId;
   }
@@ -203,6 +224,35 @@ export function createDialogs(ctx) {
       element('span', { text: `${prefix}: ${paceText(pace)}. «Медленно» — не больше ±2 за ответ, «быстро» — изменения ×1,5.` }),
       button('Сбросить темп', 'btn', onReset),
     ];
+  }
+
+  /**
+   * Pace of each scale of one line, by hand: обычно / медленно / быстро.
+   * Folded by default; the summary says what is set. A trope fills it too.
+   */
+  function paceEditor(pair, pace, onChange, lineLabel = '') {
+    const box = element('details', { className: 'pace-editor' });
+    const key = pairId(pair);
+    box.open = paceEditorOpen.has(key);
+    box.addEventListener('toggle', () => { if (box.open) paceEditorOpen.add(key); else paceEditorOpen.delete(key); });
+    const set = Object.keys(pace ?? {}).length;
+    const head = lineLabel ? `Темп ${lineLabel}` : 'Темп шкал';
+    box.append(element('summary', { text: set ? `${head}: ${paceText(pace)}` : `${head}: везде обычный` }));
+    box.append(element('p', { className: 'muted', style: { fontSize: '11px', margin: '4px 0' }, text: '«Медленно» — не больше ±2 за ответ, «быстро» — изменения ×1,5. Действует поверх темпа чата (Настройки → Отношения).' }));
+    const grid = element('div', { className: 'pace-grid' });
+    for (const definition of metricDefinitions(ctx.snapshot, pair)) {
+      const select = element('select', { 'aria-label': `Темп: ${definition.label}` },
+        [['', 'обычно'], ['slow', 'медленно'], ['fast', 'быстро']].map(([value, text]) => element('option', { value, text, selected: (pace?.[definition.key] ?? '') === value })));
+      select.addEventListener('change', () => {
+        const next = { ...(pace ?? {}) };
+        if (select.value) next[definition.key] = select.value; else delete next[definition.key];
+        onChange(next);
+      });
+      grid.append(element('label', { className: 'pace-cell' }, [element('span', { text: definition.label }), select]));
+    }
+    box.append(grid);
+    if (set) box.append(button('Сбросить темп', 'btn small', () => onChange({})));
+    return box;
   }
 
   /** Small note under a factor that came from a trope. */
@@ -236,7 +286,7 @@ export function createDialogs(ctx) {
     const body = element('div', { className: 'factors-body' });
     const status = element('p', { className: 'muted factors-status', role: 'status' });
     const setSheetStatus = (message, danger = false) => { status.textContent = message || ''; status.classList.toggle('danger', danger); };
-    body.append(element('p', { className: 'muted', style: { fontSize: '11px', marginTop: '0' }, text: 'Что приближает или отдаляет эту связь. Факторы передаются анализатору: сцена, совпавшая с фактором, даёт изменение соответствующей шкалы в выбранную сторону.' }));
+    body.append(element('p', { className: 'muted', style: { fontSize: '11px', marginTop: '0' }, text: 'От чего растут или падают чувства первого ко второму: что делает второй и что происходит между ними. Не то, что должен делать первый. Факторы передаются анализатору: сцена, совпавшая с фактором, двигает шкалу в выбранную сторону.' }));
 
     // End point of THIS directed line. The reverse line is a separate object with its own.
     const lineName = pairLabel(ctx.snapshot, pair);
@@ -260,6 +310,20 @@ export function createDialogs(ctx) {
       element('div', { className: 'factors-generate-row' }, [goalWish, goalGenerate]),
     ]));
 
+    // How the model read these two for the last generated factors: the proof it analysed, not copied.
+    const analysisBox = element('details', { className: 'factor-analysis' });
+    const renderAnalysis = analysis => {
+      analysisBox.hidden = !analysis;
+      if (!analysis) return;
+      analysisBox.replaceChildren(
+        element('summary', { text: 'Как модель поняла персонажей' }),
+        ...[['Чьи чувства', analysis.subject], ['К кому', analysis.object], ['Между ними', analysis.dynamic]]
+          .filter(([, text]) => text).map(([label, text]) => element('p', {}, [element('b', { text: `${label}: ` }), text])),
+      );
+    };
+    renderAnalysis(ctx.snapshot.ui?.analyses?.[pairId(pair)] ?? null);
+    body.append(analysisBox);
+
     const list = element('div', { className: 'factor-list' });
     function renderRows() {
       list.replaceChildren();
@@ -271,7 +335,8 @@ export function createDialogs(ctx) {
         direction.append(element('option', { value: 'up', text: '+ рост', selected: factor.direction === 'up' }));
         direction.append(element('option', { value: 'down', text: '− падение', selected: factor.direction === 'down' }));
         direction.addEventListener('change', () => { factor.direction = direction.value; });
-        const text = element('textarea', { value: factor.text ?? '', 'aria-label': 'Условие', placeholder: 'Например: делится личными тайнами', rows: 2 });
+        const text = element('textarea', { value: factor.text ?? '', 'aria-label': 'Условие', placeholder: 'Например: Судзу держит слово, даже когда ей невыгодно', rows: 2 });
+        const hits = ctx.snapshot.factorHits?.[pairId(pair)]?.[String(factor.text ?? '').trim()] ?? 0;
         const autoGrow = () => { text.style.height = 'auto'; text.style.height = `${Math.max(44, text.scrollHeight + 4)}px`; };
         text.addEventListener('input', () => { factor.text = text.value; autoGrow(); });
         requestAnimationFrame(autoGrow);
@@ -279,6 +344,7 @@ export function createDialogs(ctx) {
         list.append(element('div', { className: 'factor-row' }, [
           element('div', { className: 'factor-controls' }, [scale, direction, remove]),
           text,
+          element('span', { className: `factor-hits${hits ? ' on' : ''}`, text: hits ? `сработал: ${hits}` : 'ещё не срабатывал', title: 'Сколько раз анализатор изменил шкалу, сославшись на этот фактор (по журналу чата)' }),
           originBadge(factor),
         ].filter(Boolean)));
       });
@@ -286,7 +352,7 @@ export function createDialogs(ctx) {
     }
     renderRows();
     const paceBox = element('div', { className: 'pace-box' });
-    const renderPace = () => paceBox.replaceChildren(...paceControls(pace, () => { pace = {}; renderPace(); }));
+    const renderPace = () => paceBox.replaceChildren(paceEditor(pair, pace, next => { pace = next; renderPace(); }));
     renderPace();
 
     const addRow = button('+ Добавить фактор', 'btn', () => {
@@ -350,25 +416,41 @@ export function createDialogs(ctx) {
     };
     tropeSelect.addEventListener('change', describeTrope);
     describeTrope();
-    const addTrope = button('Поставить троп', 'btn', () => {
+    const putTrope = (result, note) => {
+      const kept = factors.filter(factor => !factor.origin);
+      const replaced = factors.length - kept.length;
+      factors.splice(0, factors.length, ...kept);
+      const added = appendUniqueFactors(factors, result?.factors ?? []);
+      pace = { ...(result?.pace ?? {}) };
+      renderRows();
+      renderPace();
+      setSheetStatus(`${note}Добавлено факторов: ${added}${replaced ? `, факторы прежнего тропа убраны: ${replaced}` : ''}. Ручные факторы сохранены. Проверьте и нажмите «Сохранить».`);
+    };
+    const ids = { tropeId: '', sourceId: pairSource(pair), targetId: pairTarget(pair) };
+    // The trope is written for these two by the model, from the lorebook; the template is the fallback.
+    const addTrope = button('Поставить троп', 'btn', async () => {
+      addTrope.disabled = true;
+      setSheetStatus('Пишу троп под этих персонажей по лорбуку…');
       try {
-        const result = facade.invoke('onPairTropeFactors', { tropeId: tropeSelect.value });
-        const kept = factors.filter(factor => !factor.origin);
-        const replaced = factors.length - kept.length;
-        factors.splice(0, factors.length, ...kept);
-        const added = appendUniqueFactors(factors, result?.factors ?? []);
-        pace = { ...(result?.pace ?? {}) };
-        renderRows();
-        renderPace();
-        setSheetStatus(`Добавлено факторов: ${added}${replaced ? `, факторы прежнего тропа убраны: ${replaced}` : ''}. Ручные факторы сохранены. Проверьте и нажмите «Сохранить».`);
-      } catch (error) { setSheetStatus(error?.message || 'Не удалось поставить троп', true); }
-    });
+        const result = await facade.invoke('onTropeFactorsFromLore', { ...ids, tropeId: tropeSelect.value });
+        renderAnalysis(result?.analysis ?? null);
+        putTrope(result, 'Троп написан по разбору персонажей (раскройте «Как модель поняла персонажей»). ');
+      } catch (error) {
+        try {
+          putTrope(facade.invoke('onPairTropeFactors', { ...ids, tropeId: tropeSelect.value }), `Модель не ответила (${error?.message || error}), поставлен шаблон тропа. `);
+        } catch (fallback) { setSheetStatus(fallback?.message || 'Не удалось поставить троп', true); }
+      } finally { addTrope.disabled = false; }
+    }, 'Модель пишет факторы тропа под этих двоих: по их характерам в лорбуке и сценам');
+    const addTemplate = button('Шаблон', 'btn small', () => {
+      try { putTrope(facade.invoke('onPairTropeFactors', { ...ids, tropeId: tropeSelect.value }), 'Шаблон тропа без модели. '); }
+      catch (error) { setSheetStatus(error?.message || 'Не удалось поставить троп', true); }
+    }, 'Заранее написанные факторы тропа, без запроса к модели');
 
     body.append(
       list, addRow, paceBox,
       element('div', { className: 'factors-generate' }, [
         element('p', { className: 'muted', style: { fontSize: '11px' }, text: 'Готовый троп: заранее прописанные факторы без запроса к модели. Заменяет факторы прежнего тропа, ручные остаются. Троп линии важнее тропа треугольника.' }),
-        element('div', { className: 'factors-generate-row' }, [tropeSelect, addTrope]),
+        element('div', { className: 'factors-generate-row' }, [tropeSelect, addTrope, addTemplate]),
         tropeHint,
       ]),
       element('div', { className: 'factors-generate' }, [

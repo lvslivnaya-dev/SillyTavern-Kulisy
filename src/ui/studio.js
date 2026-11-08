@@ -17,6 +17,7 @@ import { KNOWLEDGE_STYLE, createKnowledgePages } from './pages/knowledge.js';
 import { WORLD_STYLE, createWorldPages } from './pages/world.js';
 import { WARDROBE_STYLE, createWardrobePages } from './pages/wardrobe.js';
 import { LIBRARY_STYLE, createLibraryPages } from './pages/library.js';
+import { CALENDAR_STYLE, createCalendarPages } from './pages/calendar.js';
 
 const STYLE = `
 ${hostThemeCss('--rs-bg:var(--k-bg);--rs-panel:var(--k-panel);--rs-inset:var(--k-inset);--rs-track:var(--k-track);--rs-line:var(--k-line);--rs-text:var(--k-text);--rs-muted:var(--k-muted);--rs-accent:var(--k-accent);--rs-danger:var(--k-danger);--rs-backdrop:var(--k-backdrop)')}
@@ -27,8 +28,8 @@ ${hostThemeCss('--rs-bg:var(--k-bg);--rs-panel:var(--k-panel);--rs-inset:var(--k
 const TABS = NAV_TABS;
 /** Page headings; tabs not listed (memories, tensions, triangles) show the selected pair. */
 const PAGE_TITLES = Object.freeze({
-  scene: 'Сейчас', characters: 'Персонажи', leaks: 'Проверка ответов', events: 'Лента событий',
-  chronicle: 'Хроника', places: 'Локации', items: 'Вещи', wardrobe: 'Гардероб',
+  scene: 'Сейчас', characters: 'Персонажи', persona: 'Персона', leaks: 'Проверка ответов', events: 'Лента событий', secrets: 'Секреты',
+  chronicle: 'Хроника', places: 'Локации', items: 'Вещи', wardrobe: 'Гардероб', calendar: 'Календарь',
   overview: 'Все отношения', headcanons: 'Хедканоны отношений',
   journal: 'История изменений', lorebooks: 'Подключённые лорбуки', settings: 'Настройки',
 });
@@ -52,7 +53,7 @@ export function createRelationshipStudio(options = {}) {
   let triangleSetupId = null; // triangle whose setup sheet is open in the factors layer
   const isPhone = () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 760px)').matches;
 
-  const style = element('style', { text: STYLE + KNOWLEDGE_STYLE + SETTINGS_STYLE + WORLD_STYLE + WARDROBE_STYLE + LIBRARY_STYLE + `
+  const style = element('style', { text: STYLE + KNOWLEDGE_STYLE + SETTINGS_STYLE + WORLD_STYLE + WARDROBE_STYLE + LIBRARY_STYLE + CALENDAR_STYLE + `
     .relationship-card{min-width:0;overflow:hidden}.relationship-card .grid{display:flex;flex-direction:column;gap:14px}.relationship-card .card{min-width:0;width:100%;position:static;grid-area:auto}.relationship-card .metric{grid-template-columns:minmax(80px,110px) minmax(0,1fr) 42px}.relationship-card input[type=range]{min-width:0;width:100%}.item p{overflow-wrap:anywhere}.chips{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0}.chips .active{border-color:var(--rs-accent)}.triangle-edges{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:12px}.header{flex-wrap:wrap}
     input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:20px;background:transparent;cursor:pointer;accent-color:var(--rs-accent)}
     input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:4px;background:var(--rs-track);border:1px solid var(--rs-line)}
@@ -96,6 +97,16 @@ export function createRelationshipStudio(options = {}) {
     .pace-box:empty{display:none}
     .pace-box .btn,.pace-line .btn{min-height:30px;padding:4px 10px;font-size:12px}
     .pace-line{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px;margin:4px 0}
+    .pace-editor{width:100%}
+    .factor-hits{font-size:11px;opacity:.65}
+    .factor-analysis{margin:0 0 10px;font-size:12px}
+    .factor-analysis summary{cursor:pointer;font-weight:600}
+    .factor-analysis p{margin:6px 0 0;line-height:1.45}
+    .factor-hits.on{opacity:1;font-weight:600}
+    .pace-editor summary{cursor:pointer;font-weight:600}
+    .pace-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:6px 12px;margin:6px 0}
+    .pace-cell{display:flex;justify-content:space-between;align-items:center;gap:6px;font-size:12px}
+    .pace-cell select{min-width:0;max-width:110px}
     .sheet-section:first-child{margin-top:0}
     .relationship-card>details+details{margin-top:12px;padding-top:12px;border-top:1px solid var(--rs-line)}
     .relationship-card>details>summary{cursor:pointer;font-weight:600;margin-bottom:6px}
@@ -551,8 +562,29 @@ export function createRelationshipStudio(options = {}) {
     return element('aside', { className: 'sidebar' }, isDocked() ? [nav] : [nav, renderTools()]);
   }
 
-  /** Persona binding and the edited pair: under the menu in the window, atop the page when docked. */
-  function renderTools() {
+  /** «Персона»: which SillyTavern persona this chat is, and her hidden character for the factor analysis. */
+  function renderPersonaPage() {
+    const view = element('div', { className: 'records-view' });
+    const binding = element('div', { className: 'card' }, [element('h3', { text: 'Персона этого чата' }), personaBinding()]);
+    view.append(binding);
+    const card = element('div', { className: 'card' }, [element('h3', { text: 'Скрытый характер' })]);
+    if (!snapshot.personaAvatar) {
+      card.append(element('p', { className: 'muted', text: 'Сначала привяжите персону: характер хранится у персоны SillyTavern и подходит ко всем её чатам.' }));
+    } else {
+      const field = element('textarea', { rows: 10, maxlength: 4000, value: snapshot.personaPrivate ?? '', 'aria-label': 'Скрытый характер персоны', placeholder: 'Какая она на самом деле: характер, привычки, что прячет, на что реагирует. Например: колючая и насмешливая, но теряется от прямой нежности; ненавидит, когда её жалеют; прячет шрамы под длинными рукавами.' });
+      const save = button('Сохранить', 'btn primary', () => act('onSetPersonaPrivate', { text: field.value }, 'persona-private'));
+      card.append(
+        element('p', { className: 'muted', style: { fontSize: '12px', margin: '0 0 8px' }, text: `Для «${snapshot.personaBoundName}», во всех её чатах. Рассказчик и анализатор этого НЕ получают, поэтому персонажи не «знают» её характер с первой секунды знакомства. Читается только при разборе персонажей для факторов роста и тропов: модель понимает, какие поступки персоны тронут персонажа и как она себя поведёт. В текст факторов попадают только видимые поступки, а не черты.` }),
+        field,
+        element('div', { className: 'row', style: { marginTop: '8px' } }, [save, element('span', { className: 'muted', style: { fontSize: '11px' }, text: `${(snapshot.personaPrivate ?? '').length} / 4000` })]),
+      );
+    }
+    view.append(card);
+    return view;
+  }
+
+  /** Which SillyTavern persona this chat is: the select, «Привязать», «Отвязать» and the warnings. */
+  function personaBinding() {
     const personaForm = element('div', { className: 'field' });
     const tavernPersonas = snapshot.tavernPersonas || [];
     const personaSelect = element('select', { 'aria-label': 'Персона SillyTavern для этого чата' });
@@ -577,6 +609,15 @@ export function createRelationshipStudio(options = {}) {
     } else if (snapshot.chatPersonaName) {
       personaForm.append(element('p', { className: 'muted', style: { fontSize: '11px' }, text: `Персона этого чата в Tavern — «${snapshot.chatPersonaName}». Нажмите «Привязать» с выбранным именем, чтобы скрыть её исходящие линии.` }));
     }
+    personaForm.append(element('p', { className: 'muted', style: { fontSize: '11px' }, text: 'Её исходящие чувства не отслеживаются, входящие к ней — отслеживаются.' }));
+    return personaForm;
+  }
+
+  /** The edited pair (and a link to the persona page): under the menu in the window, atop the page when docked. */
+  function renderTools() {
+    const personaForm = element('div', { className: 'field' }, [
+      button(snapshot.personaBoundName ? `Персона: ${snapshot.personaBoundName}` : 'Персона не привязана', `btn small${snapshot.personaMismatch ? ' danger' : ''}`, () => setTab('persona'), 'Привязка персоны и её скрытый характер'),
+    ]);
     const pairForm = element('div', { className: 'field', style: { borderTop: '1px solid var(--rs-line)', marginTop: '12px', paddingTop: '12px' } });
     const pair = getPair(snapshot, selectedPairId);
     pairForm.append(element('p', { className: 'section-title', style: { margin: '0 0 4px' }, text: 'Редактируемая пара' }), pairToolbar(pair));
@@ -589,7 +630,6 @@ export function createRelationshipStudio(options = {}) {
       element('summary', { text: summaryText }),
       personaForm,
       pairForm,
-      element('p', { className: 'muted', style: { fontSize: '11px' }, text: 'Персона выбирается из вкладки «Персоны» SillyTavern: её исходящие чувства не отслеживаются, входящие к ней — отслеживаются.' }),
     );
     tools.addEventListener('toggle', () => { if (isPhone()) toolsOpen = tools.open; });
     if (isDocked()) {
@@ -644,12 +684,13 @@ export function createRelationshipStudio(options = {}) {
   function renderContent(pair) {
     const content = element('main', { className: 'content' });
     const hero = element('div', { className: 'hero' }, [
-      element('p', { className: 'section-title', text: TABS.find(([id]) => id === tab)?.[1] || tab }),
+      // Above a page's own title stands its menu group («Сцена»), not the same word twice.
+      element('p', { className: 'section-title', text: PAGE_TITLES[tab] ? (NAV_GROUPS.find(group => group.items.some(([id]) => id === tab))?.title ?? '') : (TABS.find(([id]) => id === tab)?.[1] || tab) }),
       element('h2', { text: PAGE_TITLES[tab] ?? pairLabel(snapshot, pair) }),
       ...(tab === 'overview' ? [element('span', { className: 'muted', text: 'Направление важно: обратная связь редактируется отдельно.' })] : []),
     ]);
     content.append(hero);
-    const knowledgePage = { scene: renderNow, characters: renderCharacters, events: renderEvents, leaks: renderChecks, chronicle: renderChronicle, places: renderPlaces, items: renderItems, wardrobe: renderWardrobe }[tab];
+    const knowledgePage = { scene: renderNow, characters: renderCharacters, events: renderEvents, secrets: renderSecrets, persona: renderPersonaPage, leaks: renderChecks, chronicle: renderChronicle, places: renderPlaces, items: renderItems, wardrobe: renderWardrobe, calendar: renderCalendar }[tab];
     if (knowledgePage) {
       content.append(knowledgePage());
       return content;
@@ -730,13 +771,13 @@ export function createRelationshipStudio(options = {}) {
     get triangleSetupId() { return triangleSetupId; },
     set triangleSetupId(value) { triangleSetupId = value; },
   };
-  for (const create of [createDialogs, createCharactersPage, createOverviewPage, createRecordsPage, createHeadcanonsPage, createTrianglesPage, createSystemPages, createKnowledgePages, createWorldPages, createWardrobePages, createLibraryPages]) Object.assign(ctx, create(ctx));
+  for (const create of [createDialogs, createCharactersPage, createOverviewPage, createRecordsPage, createHeadcanonsPage, createTrianglesPage, createSystemPages, createKnowledgePages, createWorldPages, createWardrobePages, createLibraryPages, createCalendarPages]) Object.assign(ctx, create(ctx));
   cleanups.push(() => ctx.destroyWardrobe?.(), () => ctx.destroyLibrary?.());
   const {
     renderFactorsDialog, renderTriangleDialog, renderAllRelationships, renderCollection, renderJournal,
     renderLorebooks, renderTriangles, renderHeadcanons, renderSettings,
-    renderCharacters, renderEvents,
-    renderNow, renderPlaces, renderItems, renderChronicle, renderChecks, renderWardrobe,
+    renderCharacters, renderEvents, renderSecrets,
+    renderNow, renderPlaces, renderItems, renderChronicle, renderChecks, renderWardrobe, renderCalendar,
   } = ctx;
 
   document.addEventListener('keydown', onKeyDown);

@@ -32,6 +32,10 @@ export {
   chronicleStats, editSummary, emptyChronicle, levelLabel, markStale, mergeCandidates, mergeSummaries, normalizeChronicle, pinSummary,
   rebuildScene, removeScene, scenesOf, unfoldSummary,
 } from './chronicle.js';
+export {
+  CALENDAR_LIMITS, MONTHS, REPEATS, addDays, anchorFor, buildCalendarPrompt, dateOfDay, eventsOn, formatDate, fromTemplate, humanDate,
+  normalizeCalendar, normalizeEvent, normalizeTemplates, occursOn, parseDate, shortDate, toTemplate, upcoming, weekdayOf,
+} from './calendar.js';
 export { LORE_SECRET_LIMITS, cleanSecretText, isSecretEntry, loreSecretEvent, parseSecretMark, secretEntriesOf, stripSecretEntries } from './lore-secrets.js';
 export { KNOWLEDGE_PROMPT_DEFAULTS, KNOWLEDGE_RULES, buildKnowledgePrompt, selectKnowledgeLines } from './knowledge-prompt.js';
 export {
