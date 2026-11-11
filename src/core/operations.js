@@ -171,6 +171,8 @@ function applyMutation(next, operation) {
         item.text = text.slice(0, 1000);
       }
       if (changes.intensity != null) item.intensity = Math.max(1, Math.min(5, Math.round(Number(changes.intensity)) || 3));
+      // Pinned: always sent, past the ranking and the limits.
+      if (changes.pinned != null) { if (changes.pinned) item.pinned = true; else delete item.pinned; }
       for (const field of ['participantIds', 'knownBy']) {
         if (changes[field] == null) continue;
         if (!payload.shared) throw new TypeError(`${field} can only be edited on shared records`);

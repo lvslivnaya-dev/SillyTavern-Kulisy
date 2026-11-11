@@ -1,21 +1,72 @@
-MIT License
+Лицензия Кулис
+Copyright (c) 2026 Слива & Hugh. Все права защищены.
+Оригинал: https://github.com/lvslivnaya-dev/SillyTavern-Kulisy
 
-Copyright (c) 2026 Слива & Hugh
+Эта лицензия действует для версий Кулис начиная с 0.1.5 и для всех следующих.
+Версии до 0.1.5 были выпущены под лицензией MIT и остаются под ней.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+1. Использование. Вы можете бесплатно устанавливать Кулисы и пользоваться ими
+   в SillyTavern, в том числе получать обновления из оригинального репозитория.
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+2. Распространение. Распространять Кулисы можно только в неизменном виде,
+   целиком, вместе с этим файлом LICENSE и с явным указанием авторов
+   («Слива & Hugh») и ссылки на оригинальный репозиторий.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+3. Запрещено:
+   а) изменять код, тексты и оформление Кулис, создавать на их основе
+      производные работы, распространять или публиковать изменённые версии;
+   б) встраивать Кулисы или любую их часть (код, стили, тексты,
+      картинки, промпты) в другие расширения, программы, сборки и проекты;
+   в) выдавать Кулисы или их части за свою работу, убирать или
+      менять указание авторов.
+
+4. Всё, что не разрешено пунктами 1 и 2, запрещено без письменного
+   разрешения авторов. За разрешением обращайтесь через Issues
+   оригинального репозитория.
+
+5. ПРОГРАММА ПРЕДОСТАВЛЯЕТСЯ «КАК ЕСТЬ», БЕЗ КАКИХ-ЛИБО ГАРАНТИЙ. Авторы
+   не отвечают за любой ущерб, возникший из-за её использования.
+
+6. Происхождение. Часть кода Кулис взята из Движка отношений
+   (https://github.com/lvslivnaya-dev/SillyTavern-Relationship-Engine) версии
+   0.4.0, выпущенной под лицензией MIT. Для этих частей в их редакции 0.4.0
+   сохраняется уведомление MIT:
+   Copyright (c) 2026 Слива & Hugh.
+   Permission is hereby granted, free of charge, to any person obtaining a copy
+   of this software and associated documentation files (the "Software"), to deal
+   in the Software without restriction, including without limitation the rights
+   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+   copies of the Software, and to permit persons to whom the Software is
+   furnished to do so, subject to the following conditions: The above copyright
+   notice and this permission notice shall be included in all copies or
+   substantial portions of the Software. THE SOFTWARE IS PROVIDED "AS IS",
+   WITHOUT WARRANTY OF ANY KIND.
+
+---------------------------------------------------------------------------
+Kulisy License (English translation; the Russian text above prevails)
+Copyright (c) 2026 Слива & Hugh. All rights reserved.
+Original: https://github.com/lvslivnaya-dev/SillyTavern-Kulisy
+
+This license applies to Kulisy version 0.1.5 and all later versions.
+Versions before 0.1.5 were released under the MIT License and remain so.
+
+1. Use. You may install and use Kulisy in SillyTavern free of charge,
+   including receiving updates from the original repository.
+2. Redistribution. You may redistribute Kulisy only unmodified and
+   complete, together with this LICENSE file, clearly crediting the authors
+   ("Слива & Hugh") and linking to the original repository.
+3. You may not:
+   a) modify its code, texts or design, create derivative works based on it,
+      or distribute or publish modified versions;
+   b) embed Kulisy or any part of it (code, styles, texts, images,
+      prompts) into other extensions, programs, bundles or projects;
+   c) present Kulisy or any part of it as your own work, or remove or
+      alter the authors' credit.
+4. Anything not permitted by sections 1 and 2 requires the authors' written
+   permission. Ask through the Issues of the original repository.
+5. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND. The authors
+   are not liable for any damage arising from its use.
+6. Origin. Part of the Kulisy code comes from Relationship Engine 0.4.0
+   (https://github.com/lvslivnaya-dev/SillyTavern-Relationship-Engine), released
+   under the MIT License. For those parts as they were in 0.4.0 the MIT notice
+   above (section 6 of the Russian text) is kept.

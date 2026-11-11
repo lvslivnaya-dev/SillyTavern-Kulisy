@@ -5,7 +5,7 @@
  * the chat itself is never changed apart from the markers).
  */
 import {
-  CHRONICLE_KEEP, CHRONICLE_MARKER, addScene, levelLabel, mergeCandidates, mergeSummaries, uniqueId,
+  CHRONICLE_KEEP, CHRONICLE_MARKER, addScene, levelLabel, looksRefused, mergeCandidates, mergeSummaries, uniqueId,
 } from '../core/index.js';
 import { withBusy } from './busy.js';
 
@@ -88,15 +88,28 @@ export function parseSummaryText(raw) {
     .replace(/^```[a-z]*\s*|\s*```$/gi, '')
     .replace(/^\s*(сводка|summary)\s*:\s*/i, '')
     .trim();
-  return text.length >= 20 ? text : null;
+  // A refusal or an API error is not a summary: it must never be saved in its place.
+  return text.length >= 20 && !looksRefused(text) ? text : null;
+}
+
+/** The model's answer was a refusal (a filter), not an empty one. */
+export class RefusedError extends Error {
+  constructor(quote) {
+    super(`Модель отказалась писать сводку (похоже на фильтр): «${String(quote).replace(/\s+/g, ' ').slice(0, 140)}». Сводка не записана. Можно выбрать для хроники другую модель: «Настройки → Модели и API → Вспомогательный API → Анализ ответов и истории».`);
+    this.name = 'RefusedError';
+  }
 }
 
 async function ask(context, prompt, label) {
+  let refusal = '';
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const raw = await withBusy(label, () => context.generateRaw({ prompt, trimNames: false }));
     const text = parseSummaryText(raw);
     if (text) return text;
+    const said = String(typeof raw === 'string' ? raw : raw?.text ?? raw?.message ?? '').replace(/<think\b[^>]*>[\s\S]*?<\/think>/gi, '').trim();
+    if (looksRefused(said)) refusal = said;
   }
+  if (refusal) throw new RefusedError(refusal);
   throw new Error('Модель дважды вернула пустую сводку');
 }
 
@@ -176,6 +189,23 @@ export function hideSummarized(coreChat, chronicle) {
   return removed;
 }
 
+/**
+ * Which chat messages hideSummarized takes out of the prompt, for the mark on them:
+ * [{ messageIndex, number }] with the scene's number in story order (1-based).
+ * The same rule as hideSummarized, so the mark never lies about what the model gets.
+ */
+export function summarizedMarks(chat, chronicle) {
+  const scenes = (chronicle?.summaries ?? []).filter(item => item.level === 0 && !item.childIds)
+    .sort((left, right) => left.seq - right.seq);
+  const numbers = new Map(scenes.map((scene, position) => [scene.id, position + 1]));
+  const marks = [];
+  (chat ?? []).forEach((message, messageIndex) => {
+    const marker = message?.extra?.[CHRONICLE_MARKER];
+    if (marker && marker !== CHRONICLE_KEEP && numbers.has(marker)) marks.push({ messageIndex, number: numbers.get(marker) });
+  });
+  return marks;
+}
+
 /** Messages of a scene, in chat order. */
 export function sceneMessages(chat, sceneId) {
   const indices = [];
@@ -197,4 +227,9 @@ export function releaseScene(chat, sceneId) {
   const indices = sceneMessages(chat, sceneId);
   for (const index of indices) chat[index].extra[CHRONICLE_MARKER] = CHRONICLE_KEEP;
   return indices.length;
+}
+
+/** How many chat messages stand behind these scenes. */
+export function messagesOfScenes(chat, sceneIds) {
+  return sceneIds.reduce((sum, id) => sum + sceneMessages(chat, id).length, 0);
 }

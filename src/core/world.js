@@ -30,8 +30,10 @@
  * place, item or character is a no-op, unknown IDs are dropped from lists.
  */
 
+import { cleanWeather } from './weather.js';
+
 export const WORLD_OPERATION_TYPES = Object.freeze([
-  'clock.set',
+  'clock.set', 'weather.set',
   'location.add', 'location.update', 'location.remove',
   'wardrobe.set', 'condition.add', 'condition.update', 'condition.remove',
   'item.add', 'item.update', 'item.remove',
@@ -42,6 +44,8 @@ export const WORLD_OPERATION_TYPES = Object.freeze([
 export const FEATURE_KINDS = Object.freeze(['scar', 'tattoo', 'piercing', 'hair', 'eyes', 'body', 'other']);
 
 export const DAY_PARTS = Object.freeze(['morning', 'day', 'evening', 'night']);
+/** What kind of scene it is now; 'calm' is the default and is not stored. */
+export const SCENE_MODES = Object.freeze(['calm', 'fight', 'intim']);
 /** normal: sent only when its owner is on stage or it is mentioned; important: always for present owners; key: always. */
 export const ITEM_IMPORTANCE = Object.freeze(['normal', 'important', 'key']);
 
@@ -235,8 +239,18 @@ export function applyWorldMutation(next, operation) {
       if (payload.flashback != null) {
         if (payload.flashback) clock.flashback = true; else delete clock.flashback;
       }
+      if (payload.mode != null) {
+        if (payload.mode !== 'calm' && SCENE_MODES.includes(payload.mode)) clock.mode = payload.mode; else delete clock.mode;
+      }
       // Time passes for whoever is on stage: they were seen on this day too.
       markOnStage(next);
+      break;
+    }
+    case 'weather.set': {
+      // { clear: true } removes it; otherwise kind (+ temp, text, lock) replaces it, stamped with today's story day.
+      if (payload.clear) { delete world.weather; break; }
+      const clean = cleanWeather(payload, world.clock.day);
+      if (clean) world.weather = clean;
       break;
     }
     case 'location.add': {
@@ -447,7 +461,8 @@ export function validateWorld(world, entityIds, scene) {
   const clock = world.clock;
   if (!clock || typeof clock !== 'object' || typeof clock.label !== 'string' || !Number.isInteger(clock.day) || clock.day < 0
     || (clock.part !== '' && !DAY_PARTS.includes(clock.part))
-    || (clock.time != null && clock.time !== '' && parseTime(clock.time) == null)) errors.push('world.clock is malformed');
+    || (clock.time != null && clock.time !== '' && parseTime(clock.time) == null)
+    || (clock.mode != null && !SCENE_MODES.includes(clock.mode))) errors.push('world.clock is malformed');
   const locationIds = new Set();
   if (!Array.isArray(world.locations)) errors.push('world.locations must be an array');
   else {

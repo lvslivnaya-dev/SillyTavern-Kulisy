@@ -18,6 +18,10 @@ import { WORLD_STYLE, createWorldPages } from './pages/world.js';
 import { WARDROBE_STYLE, createWardrobePages } from './pages/wardrobe.js';
 import { LIBRARY_STYLE, createLibraryPages } from './pages/library.js';
 import { CALENDAR_STYLE, createCalendarPages } from './pages/calendar.js';
+import { CALENDAR_BUILDER_STYLE } from './pages/calendar-builder.js';
+import { NAMES_STYLE, createNamesPages } from './pages/names.js';
+import { WEATHER_STYLE, createWeatherPages } from './pages/weather.js';
+import { DICE_STYLE, createDicePages } from './pages/dice.js';
 
 const STYLE = `
 ${hostThemeCss('--rs-bg:var(--k-bg);--rs-panel:var(--k-panel);--rs-inset:var(--k-inset);--rs-track:var(--k-track);--rs-line:var(--k-line);--rs-text:var(--k-text);--rs-muted:var(--k-muted);--rs-accent:var(--k-accent);--rs-danger:var(--k-danger);--rs-backdrop:var(--k-backdrop)')}
@@ -53,7 +57,7 @@ export function createRelationshipStudio(options = {}) {
   let triangleSetupId = null; // triangle whose setup sheet is open in the factors layer
   const isPhone = () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 760px)').matches;
 
-  const style = element('style', { text: STYLE + KNOWLEDGE_STYLE + SETTINGS_STYLE + WORLD_STYLE + WARDROBE_STYLE + LIBRARY_STYLE + CALENDAR_STYLE + `
+  const style = element('style', { text: STYLE + KNOWLEDGE_STYLE + SETTINGS_STYLE + WORLD_STYLE + WARDROBE_STYLE + LIBRARY_STYLE + CALENDAR_STYLE + CALENDAR_BUILDER_STYLE + NAMES_STYLE + WEATHER_STYLE + DICE_STYLE + `
     .relationship-card{min-width:0;overflow:hidden}.relationship-card .grid{display:flex;flex-direction:column;gap:14px}.relationship-card .card{min-width:0;width:100%;position:static;grid-area:auto}.relationship-card .metric{grid-template-columns:minmax(80px,110px) minmax(0,1fr) 42px}.relationship-card input[type=range]{min-width:0;width:100%}.item p{overflow-wrap:anywhere}.chips{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0}.chips .active{border-color:var(--rs-accent)}.triangle-edges{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:12px}.header{flex-wrap:wrap}
     input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:20px;background:transparent;cursor:pointer;accent-color:var(--rs-accent)}
     input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:4px;background:var(--rs-track);border:1px solid var(--rs-line)}
@@ -170,6 +174,7 @@ export function createRelationshipStudio(options = {}) {
     .record-head time{margin-left:auto;color:var(--rs-muted);font-size:11px}
     .record-intensity{color:var(--rs-accent);letter-spacing:2px;font-size:12px}
     .record-badge{font-size:11px;padding:1px 8px;border:1px solid var(--rs-line);border-radius:999px;color:var(--rs-muted)}
+    .record-badge.pinned{border-color:var(--rs-accent);color:var(--rs-text)}
     .record-text{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.45}
     .record-people{display:flex;flex-wrap:wrap;gap:6px}
     .record-people .chip{font-size:11px;padding:2px 9px;border-radius:999px;background:color-mix(in srgb,var(--rs-panel) 80%,var(--rs-accent));border:1px solid var(--rs-line)}
@@ -690,7 +695,7 @@ export function createRelationshipStudio(options = {}) {
       ...(tab === 'overview' ? [element('span', { className: 'muted', text: 'Направление важно: обратная связь редактируется отдельно.' })] : []),
     ]);
     content.append(hero);
-    const knowledgePage = { scene: renderNow, characters: renderCharacters, events: renderEvents, secrets: renderSecrets, persona: renderPersonaPage, leaks: renderChecks, chronicle: renderChronicle, places: renderPlaces, items: renderItems, wardrobe: renderWardrobe, calendar: renderCalendar }[tab];
+    const knowledgePage = { scene: renderNow, characters: renderCharacters, events: renderEvents, secrets: renderSecrets, persona: renderPersonaPage, leaks: renderChecks, chronicle: renderChronicle, places: renderPlaces, items: renderItems, wardrobe: renderWardrobe, calendar: renderCalendar, names: renderNames, weather: renderWeather, dice: renderDice }[tab];
     if (knowledgePage) {
       content.append(knowledgePage());
       return content;
@@ -771,13 +776,13 @@ export function createRelationshipStudio(options = {}) {
     get triangleSetupId() { return triangleSetupId; },
     set triangleSetupId(value) { triangleSetupId = value; },
   };
-  for (const create of [createDialogs, createCharactersPage, createOverviewPage, createRecordsPage, createHeadcanonsPage, createTrianglesPage, createSystemPages, createKnowledgePages, createWorldPages, createWardrobePages, createLibraryPages, createCalendarPages]) Object.assign(ctx, create(ctx));
+  for (const create of [createDialogs, createCharactersPage, createOverviewPage, createRecordsPage, createHeadcanonsPage, createTrianglesPage, createSystemPages, createKnowledgePages, createWorldPages, createWardrobePages, createLibraryPages, createCalendarPages, createNamesPages, createWeatherPages, createDicePages]) Object.assign(ctx, create(ctx));
   cleanups.push(() => ctx.destroyWardrobe?.(), () => ctx.destroyLibrary?.());
   const {
     renderFactorsDialog, renderTriangleDialog, renderAllRelationships, renderCollection, renderJournal,
     renderLorebooks, renderTriangles, renderHeadcanons, renderSettings,
     renderCharacters, renderEvents, renderSecrets,
-    renderNow, renderPlaces, renderItems, renderChronicle, renderChecks, renderWardrobe, renderCalendar,
+    renderNow, renderPlaces, renderItems, renderChronicle, renderChecks, renderWardrobe, renderCalendar, renderNames, renderWeather, renderDice,
   } = ctx;
 
   document.addEventListener('keydown', onKeyDown);

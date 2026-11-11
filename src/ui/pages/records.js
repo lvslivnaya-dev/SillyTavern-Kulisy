@@ -16,6 +16,14 @@ export function createRecordsPage(ctx) {
   let recordFilter = {};
   let editingRecordId = null; // memory/tension shown as an inline editor
 
+  /** One-off cue for the next reply. */
+  async function recall(text) {
+    try {
+      await facade.invoke('onRecallRecord', { text });
+      setStatus('Всплывёт в следующем ответе. Снять можно в шторке над полем ввода.');
+    } catch (error) { setStatus(error?.message || 'Не удалось поставить напоминание', true); }
+  }
+
   function nameOf(id) {
     return characterName((ctx.snapshot.characters || []).find(character => characterId(character) === id), id);
   }
@@ -132,6 +140,7 @@ export function createRecordsPage(ctx) {
       const article = element('article', { className: `record${item.disabled ? ' off' : ''}` }, [
         element('div', { className: 'record-head' }, [
           intensity ? element('span', { className: 'record-intensity', title: `Интенсивность ${intensity}/5`, text: '●'.repeat(intensity) + '○'.repeat(5 - intensity) }) : null,
+          item.pinned ? element('span', { className: 'record-badge pinned', title: 'Отправляется всегда, мимо отбора и лимита', text: '📌 закреплено' }) : null,
           item.disabled ? element('span', { className: 'record-badge', text: 'отключено' }) : null,
           element('time', { text: formatTime(item.timestamp || item.createdAt || item.date) }),
         ].filter(Boolean)),
@@ -144,6 +153,9 @@ export function createRecordsPage(ctx) {
           : 'Знают только участники.' })] : []),
       ]);
       const controls = element('div', { className: 'record-actions' }, [
+        button(item.pinned ? '📌 Открепить' : '📌 Закрепить', 'btn', () => act('onUpdateRecord', { ...owner, changes: { pinned: !item.pinned } }, 'record-pin'),
+          item.pinned ? 'Снова отбирать как обычную запись' : 'Отправлять всегда: мимо отбора по свежести и мимо лимита'),
+        button('Вспомнить сейчас', 'btn', () => recall(item.text), 'Разово: в следующем ответе это всплывёт в сцене'),
         button('Изменить', 'btn', () => { editingRecordId = item.id; render(); }, 'Изменить текст, участников, кому известно и интенсивность'),
         button(item.disabled ? 'Включить' : 'Отключить', 'btn', () => act('onToggleRecord', { ...owner, disabled: !item.disabled }, 'record-toggle'),
           item.disabled ? 'Включить запись' : 'Отключить запись: не попадёт в промпт'),
@@ -188,5 +200,5 @@ export function createRecordsPage(ctx) {
     return form;
   }
 
-  return { nameOf, makeRoster, linkRosters, intensityControl, renderCollection, renderRecords, renderRecordEditor };
+  return { nameOf, recall, makeRoster, linkRosters, intensityControl, renderCollection, renderRecords, renderRecordEditor };
 }

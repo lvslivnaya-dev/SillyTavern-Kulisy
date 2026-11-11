@@ -89,6 +89,69 @@
   font-weight: 600;
 }
 #ku-scene-chips .ku-dir-add { border-style: dashed; }
+/* The tiles: every tool and every value of the scene is one square button; the picked one opens its panel below. */
+#ku-scene-chips .ku-dir-title { margin-left: 2px; }
+#ku-scene-chips .ku-dir-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 8px; }
+#ku-scene-chips .ku-tile {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 1px;
+  min-width: 0;
+  min-height: 62px;
+  padding: 6px 4px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 20%, transparent);
+  background: color-mix(in srgb, var(--SmartThemeBodyColor) 6%, transparent);
+  color: var(--SmartThemeBodyColor);
+  font: inherit;
+  text-align: center;
+  cursor: pointer;
+}
+#ku-scene-chips .ku-tile:hover { background: color-mix(in srgb, var(--SmartThemeQuoteColor) 16%, transparent); }
+#ku-scene-chips .ku-tile:focus-visible { outline: 2px solid var(--SmartThemeQuoteColor); outline-offset: 1px; }
+#ku-scene-chips .ku-tile.on { border-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 70%, transparent); background: color-mix(in srgb, var(--SmartThemeQuoteColor) 22%, transparent); }
+#ku-scene-chips .ku-tile.kick { border-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 80%, transparent); background: color-mix(in srgb, var(--SmartThemeQuoteColor) 38%, transparent); font-weight: 600; }
+/* One tile cut across into thin strips: time (edits the clock), place and secrets (open their pages). */
+#ku-scene-chips .ku-tile-stack {
+  display: grid;
+  align-content: stretch;
+  gap: 3px;
+  min-width: 0;
+  min-height: 62px;
+  padding: 3px;
+  border-radius: 14px;
+  border: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 20%, transparent);
+  background: color-mix(in srgb, var(--SmartThemeBodyColor) 4%, transparent);
+}
+#ku-scene-chips .ku-strip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: 9px;
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--SmartThemeBodyColor) 7%, transparent);
+  color: var(--SmartThemeBodyColor);
+  font: inherit;
+  font-size: .92em;
+  text-align: left;
+  cursor: pointer;
+}
+#ku-scene-chips .ku-strip:hover { background: color-mix(in srgb, var(--SmartThemeQuoteColor) 16%, transparent); }
+#ku-scene-chips .ku-strip:focus-visible { outline: 2px solid var(--SmartThemeQuoteColor); outline-offset: 1px; }
+#ku-scene-chips .ku-strip.on { border-color: color-mix(in srgb, var(--SmartThemeQuoteColor) 70%, transparent); background: color-mix(in srgb, var(--SmartThemeQuoteColor) 22%, transparent); }
+#ku-scene-chips .ku-strip-ico { flex: none; }
+#ku-scene-chips .ku-strip-val { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
+#ku-scene-chips .ku-dice-label { flex: 0 0 8.5em; }
+#ku-scene-chips .ku-dice-chips { flex: 1 1 14em; min-width: 0; display: flex; flex-wrap: wrap; gap: 5px; }
+#ku-scene-chips .ku-dice-chip { max-width: 100%; text-align: left; white-space: normal; }
+#ku-scene-chips .ku-dice-chip.on { box-shadow: 0 0 8px color-mix(in srgb, var(--SmartThemeQuoteColor) 70%, transparent); font-weight: 600; }
+#ku-scene-chips .ku-tile-ico { font-size: 1.5em; line-height: 1.1; }
+#ku-scene-chips .ku-tile-name { font-size: .72em; letter-spacing: .08em; text-transform: uppercase; opacity: .65; }
+#ku-scene-chips .ku-tile-val { font-size: .92em; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-variant-numeric: tabular-nums; }
 #ku-scene-chips .ku-dir-seg { border-radius: 20px; padding: 2px 9px; }
 #ku-scene-chips .ku-dir-card {
   display: grid;
@@ -184,3 +247,67 @@
 .mes_block .ku-leak-quote { font-style: italic; opacity: .85; }
 .mes_block .ku-leak-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .mes_block .ku-leak-button { margin: 0; padding: 3px 10px; font-size: 0.9em; }
+
+/* «Создать секрет»: the button over a selected passage and the window that checks the result. */
+#ku-secret-chip {
+  position: fixed;
+  z-index: 3000;
+  padding: 6px 12px;
+  border: 1px solid var(--SmartThemeBorderColor);
+  border-radius: 10px;
+  background: var(--SmartThemeBlurTintColor);
+  color: var(--SmartThemeBodyColor);
+  font: inherit;
+  font-size: calc(var(--mainFontSize) * 0.9);
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--SmartThemeShadowColor) 55%, transparent);
+}
+#ku-secret-chip:hover { border-color: var(--SmartThemeQuoteColor); }
+#ku-secret-chip:focus-visible { outline: 2px solid var(--SmartThemeQuoteColor); outline-offset: 2px; }
+.mes[is_system="true"] .kulisy-secret { display: none; }
+
+.ku-sd { display: flex; flex-direction: column; gap: 12px; text-align: left; }
+.ku-sd-title { margin: 0; }
+.ku-sd-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.ku-sd-label { font-weight: 700; font-size: calc(var(--mainFontSize) * 0.9); }
+.ku-sd-hint { font-size: calc(var(--mainFontSize) * 0.8); opacity: .75; }
+.ku-sd-input, .ku-sd-text { width: 100%; box-sizing: border-box; resize: vertical; }
+.ku-sd-pills { display: flex; flex-wrap: wrap; gap: 6px; }
+.ku-sd-pill {
+  padding: 3px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--SmartThemeBorderColor);
+  background: transparent;
+  color: var(--SmartThemeBodyColor);
+  font: inherit;
+  font-size: calc(var(--mainFontSize) * 0.9);
+  cursor: pointer;
+}
+.ku-sd-pill small { opacity: .7; }
+.ku-sd-pill.on { border-color: var(--SmartThemeQuoteColor); background: color-mix(in srgb, var(--SmartThemeQuoteColor) 22%, transparent); font-weight: 700; }
+.ku-sd-pill:focus-visible { outline: 2px solid var(--SmartThemeQuoteColor); outline-offset: 2px; }
+.ku-sd-posts { display: flex; flex-direction: column; }
+.ku-sd-post { display: flex; gap: 8px; align-items: flex-start; padding: 5px 0; border-bottom: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 60%, transparent); font-size: calc(var(--mainFontSize) * 0.88); }
+.ku-sd-post:last-child { border-bottom: 0; }
+.ku-sd-post input { margin-top: 3px; }
+.ku-sd-preview {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid var(--SmartThemeBorderColor);
+  border-radius: 10px;
+  font-family: var(--monoFontFamily, monospace);
+  font-size: calc(var(--mainFontSize) * 0.82);
+  overflow-wrap: anywhere;
+}
+.ku-sd-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.ku-sd-again { margin: 0; }
+.ku-sd-status { font-size: calc(var(--mainFontSize) * 0.85); opacity: .85; min-height: 1.2em; }
+
+/* A secret the chronicler thinks it found: the same note as a leak, with its own two answers. */
+.mes_block .ku-secret-hint { margin: 8px 0 4px; }
+
+/* The intimacy dice: groups are cut apart by lines, so «who leads» and «kind of sex» do not run together. */
+#ku-scene-chips .ku-dir-dice-row { padding-top: 8px; margin-top: 2px; border-top: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 22%, transparent); align-items: flex-start; }
+#ku-scene-chips .ku-dir-dice .ku-dir-card-head + .ku-dir-row { padding-bottom: 6px; }
+#ku-scene-chips .ku-dice-label { padding-top: 4px; font-weight: 600; }

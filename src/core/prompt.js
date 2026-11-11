@@ -1,8 +1,12 @@
 import { isDead } from './knowledge.js';
 import { collectRecords } from './records.js';
 
+/** The newest `limit` records of a line plus every pinned one (in list order); null limit = the kind is off. */
 function compactItems(items, limit) {
-  return items.filter(item => !item.disabled).slice(-limit).map((item) => item.text || item.label || item.id).filter(Boolean).join(' | ');
+  if (limit == null) return '';
+  const live = items.filter(item => !item.disabled);
+  const fresh = new Set(limit > 0 ? live.filter(item => !item.pinned).slice(-limit) : []);
+  return live.filter(item => item.pinned || fresh.has(item)).map((item) => item.text || item.label || item.id).filter(Boolean).join(' | ');
 }
 
 /** Short behavioral hints per scale level so the model can act on numbers, not just read them. */
@@ -39,8 +43,8 @@ export function selectRuntimePrompt(state, options = {}) {
   const relationshipSet = options.relationshipIds ? new Set(options.relationshipIds) : null;
   const scaleSet = options.scales ? new Set(options.scales) : null;
   const includeKind = { memories: options.includeMemories !== false, tensions: options.includeTensions !== false };
-  const memoryLimit = includeKind.memories ? Math.max(0, options.memoryLimit ?? 3) : 0;
-  const tensionLimit = includeKind.tensions ? Math.max(0, options.tensionLimit ?? 3) : 0;
+  const memoryLimit = includeKind.memories ? Math.max(0, options.memoryLimit ?? 3) : null;
+  const tensionLimit = includeKind.tensions ? Math.max(0, options.tensionLimit ?? 3) : null;
   const maxRelationships = Math.max(0, options.maxRelationships ?? Infinity);
   const personaId = state.ui?.personaId || '';
 
@@ -127,14 +131,17 @@ export function selectRuntimePrompt(state, options = {}) {
   // Budget by section instead of cutting the tail: rules always, then lines and
   // records share the rest; whatever one section leaves unused goes to the other.
   const rules = fitLines(ruleLines, budget);
-  const rest = budget - rules.used;
-  const relationShare = ranked.length ? Math.floor(rest * 0.55) : rest;
+  // Pinned records come before everything that is ranked: they never lose to a fresher one.
+  const pinned = fitLines(ranked.filter(candidate => candidate.item.pinned).map(candidate => candidate.line), budget - rules.used);
+  const loose = ranked.filter(candidate => !candidate.item.pinned);
+  const rest = budget - rules.used - pinned.used;
+  const relationShare = loose.length ? Math.floor(rest * 0.55) : rest;
   const relations = fitLines(relationLines, relationShare);
-  const records = fitLines(ranked.map(candidate => candidate.line), rest - relations.used);
+  const records = fitLines(loose.map(candidate => candidate.line), rest - relations.used);
   const extraRelations = fitLines(relationLines.filter(line => !relations.kept.includes(line)), rest - relations.used - records.used);
   const keptRelations = relationLines.filter(line => relations.kept.includes(line) || extraRelations.kept.includes(line));
   // Records go out in story order, not in ranking order.
-  const keptRecords = candidates.filter(candidate => records.kept.includes(candidate.line)).map(candidate => candidate.line);
+  const keptRecords = candidates.filter(candidate => (candidate.item.pinned ? pinned.kept : records.kept).includes(candidate.line)).map(candidate => candidate.line);
   return [...rules.kept, ...keptRelations, ...keptRecords].join('\n');
 }
 

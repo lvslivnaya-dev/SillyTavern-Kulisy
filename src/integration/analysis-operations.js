@@ -2,7 +2,7 @@ import { applyOperation, createEntity, createOperation, isDead, relationshipId, 
 import { coupledDeltas } from './coupling.js';
 import { materializeKnowledge } from './knowledge-analysis.js';
 import { presentIds } from '../core/knowledge.js';
-import { confirmSlips, materializeClock, materializePlace, materializeSceneLocation, materializeWorldRest } from './world-analysis.js';
+import { confirmSlips, materializeClock, materializePlace, materializeSceneLocation, materializeWeather, materializeWorldRest } from './world-analysis.js';
 
 function normalizedName(value) {
   return String(value ?? '').trim().toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
@@ -243,21 +243,22 @@ export function applyAnalysisResult(state, result, metadata = {}, acceptedNewCha
   // The chroniclers: same metadata, so a swipe takes scene, events, learning, time,
   // clothes and things back too. Order: place → clock → who is on stage → the rest,
   // so someone walking in "three days later" may have changed clothes.
-  const api = { state: () => next, add, resolveId, library: options.library ?? null, wardrobe: options.wardrobe ?? null };
+  const api = { state: () => next, add, resolveId, messageIndex: metadata.messageIndex ?? null, loreTitles: options.loreTitles ?? null, library: options.library ?? null, wardrobe: options.wardrobe ?? null };
   const world = options.trackWorld === false ? null : result.world;
   const beforeWorld = next;
   const locationId = world ? materializePlace(world, api) : undefined;
-  if (world) materializeClock(world, api);
+  if (world) { materializeClock(world, api); materializeWeather(world, api); }
   let leaks = [];
   let deaths = [];
   let reveals = [];
+  let secrets = [];
   if (result.knowledge && options.trackKnowledge !== false) {
-    ({ leaks, deaths = [], reveals = [] } = materializeKnowledge(result.knowledge, { ...api, locationId }));
+    ({ leaks, deaths = [], reveals = [], secrets = [] } = materializeKnowledge(result.knowledge, { ...api, locationId }));
   } else if (locationId) {
     materializeSceneLocation(api, locationId);
   }
   if (world) materializeWorldRest(world, api, locationId ?? next.knowledge?.scene?.locationId);
   if (options.triangleEcho !== false) triangleEcho(api, operations, options);
   const slips = world ? confirmSlips(world, api, beforeWorld) : [];
-  return { state: next, operations, headcanons, leaks, deaths, reveals, slips };
+  return { state: next, operations, headcanons, leaks, deaths, reveals, secrets, slips };
 }

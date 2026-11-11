@@ -211,11 +211,19 @@ test('headcanons: ticking three characters opens a group', () => {
   }
 });
 
-test('"what the model gets" shows the knowledge block in its own sections', () => {
+test('"what the model gets": one card per block in request order, each saying what and where from, content in words, exact text apart', async () => {
+  const { describeBlocks } = await import('../src/integration/prompt-overview.js');
+  const knowledge = '[KULISY — WHO KNOWS WHAT, NARRATOR CONTROL DATA]\nscene: present=Майки; place=гараж\nstrangers[Майки & Судзу]\nunknown[Майки]: (secret) Разговор в подворотне\n\nRules:\n- unknown[X] lists events X did NOT witness.\n[/KULISY]';
+  const relationships = 'Майки>Судзу;affection=42(теплеет),fear=-2\nshared-memories[Майки,Судзу]=Драка у моста [known only to: Майки,Судзу,Ран; everyone else is unaware]';
   let studio;
   const snapshot = {
     ...sampleState(),
-    knowledgePreview: '[KULISY — WHO KNOWS WHAT, NARRATOR CONTROL DATA]\nscene: present=Майки; place=гараж\nstrangers[Майки & Судзу]\nunknown[Майки]: (secret) Подворотня\n\nRules:\n- …\n[/KULISY]',
+    promptBlocks: describeBlocks({
+      parts: { knowledge, relationships },
+      tokens: { knowledge: 480, relationships: 1500 },
+      enabled: { calendar: 'Выключено: «Календарь в промпт».' },
+    }),
+    loreGateReport: null,
   };
   const errors = captureErrors(() => {
     studio = createRelationshipStudio({ store: { getSnapshot: () => snapshot }, open: true, layout: { mode: 'window', tab: 'settings' } });
@@ -228,10 +236,41 @@ test('"what the model gets" shows the knowledge block in its own sections', () =
     assert.equal(root.querySelector('form.settings'), null);
     const section = label => [...root.querySelectorAll('.set-nav button')].find(node => node.textContent === label);
     section('Что получает модель').click();
-    const summaries = [...root.querySelectorAll('.prompt-section summary')].map(node => node.textContent);
-    assert.ok(summaries.includes('Сцена и знакомства · 2'), summaries.join(' | '));
-    assert.ok(summaries.includes('Кто чего не знает · 1'), summaries.join(' | '));
-    assert.ok(!summaries.some(text => text.startsWith('Линии и шкалы') && /· [1-9]/.test(text) && text.includes('Rules')), 'rules are not counted as lines');
+    const titles = [...root.querySelectorAll('.pm-block .pm-title')].map(node => node.textContent);
+    assert.deepEqual(titles.slice(0, 7), [
+      'Хроника: что было раньше', 'Сцена: время, место, одежда, вещи', 'Календарь: какое сегодня число', 'Кто что знает',
+      'Имена: как писать и склонять', 'Отношения: чувства, воспоминания, напряжения', 'Подсказка режиссёра',
+    ]);
+    assert.equal(titles.at(-1), 'Лорбуки: анкеты персонажей и мир');
+    const blocks = [...root.querySelectorAll('.pm-block')];
+    const knowledgeCard = blocks[3];
+    assert.match(knowledgeCard.querySelector('.pm-pill').textContent, /уходит модели/);
+    assert.match(knowledgeCard.querySelector('.pm-tokens').textContent, /480/);
+    const meta = knowledgeCard.querySelector('.pm-meta').textContent;
+    assert.match(meta, /Что это/);
+    assert.match(meta, /Откуда берётся/);
+    assert.match(meta, /Где в запросе/);
+    assert.match(meta, /Знания в промпт/, 'как выключить: настоящее название переключателя');
+    // The content in words: «Майки не знает», not the raw «unknown[Майки]:».
+    const words = knowledgeCard.querySelector('.pm-fold').textContent;
+    assert.match(words, /Майки не знает/);
+    assert.match(words, /Разговор в подворотне/);
+    assert.match(words, /Манджиро|Майки и Судзу/);
+    assert.doesNotMatch(knowledgeCard.querySelector('.pm-items').textContent, /unknown\[/);
+    // The exact text stays one fold away.
+    assert.match(knowledgeCard.querySelector('.pm-raw').textContent, /unknown\[Майки\]: \(secret\)/);
+    // Feelings as labelled numbers; the record says who else knows.
+    const relation = blocks[5].textContent;
+    assert.match(relation, /Привязанность 42/);
+    assert.match(relation, /Страх -2/);
+    assert.match(relation, /знают: Майки, Судзу, Ран/);
+    // A switched-off block says why and shows no content; an empty one says it is empty.
+    assert.match(blocks[2].querySelector('.pm-pill').textContent, /выключено/);
+    assert.match(blocks[2].textContent, /Календарь в промпт/);
+    assert.equal(blocks[2].querySelector('.pm-fold'), null);
+    assert.match(blocks[1].querySelector('.pm-pill').textContent, /пока пусто/);
+    // The bar and the total count only what is sent.
+    assert.match(root.querySelector('.set-total').textContent, /1\s?980 токенов/);
   } finally {
     studio?.destroy();
   }
@@ -521,5 +560,352 @@ test('calendar page: month grid with events, a day, the editor and the generator
     [...shadow.querySelectorAll('button')].find(item => item.textContent === 'Добавить отмеченные в календарь').click();
     assert.deepEqual(calls.at(-1).indexes, [0]);
     assert.equal(Number(calls.at(-1).year), 2025);
+  } finally { studio?.destroy(); }
+});
+
+test('names page: the library card, adding a name, editing a form, the switches', async () => {
+  const calls = [];
+  const snapshot = {
+    ...sampleState(),
+    names: { version: 1, enabled: true, entries: [
+      { id: 'n1', name: 'Рён Хайтани', aliases: ['Рён'], gender: 'm', off: false, words: [
+        { word: 'Рён', same: false, gen: 'Рёна', dat: '', acc: '', ins: '', pre: '' },
+        { word: 'Хайтани', same: true, gen: '', dat: '', acc: '', ins: '', pre: '' },
+      ] },
+    ] },
+    namesChatOff: false,
+    namesTokens: 42,
+  };
+  let studio;
+  const errors = captureErrors(() => {
+    studio = createRelationshipStudio({ store: { getSnapshot: () => snapshot }, open: true, layout: { mode: 'window', tab: 'names' }, callbacks: {
+      onNamesAdd: payload => { calls.push(['add', payload]); return Promise.resolve(); },
+      onNamesUpdate: payload => { calls.push(['update', payload]); return Promise.resolve(); },
+      onNamesChatOff: payload => { calls.push(['chat', payload]); return Promise.resolve(); },
+      onNamesRemove: payload => { calls.push(['remove', payload]); return Promise.resolve(); },
+      onNamesFill: async () => ({ filled: 1, failed: 0, asked: 1 }),
+    } });
+  });
+  try {
+    assert.deepEqual(errors, [], errors.join('\n'));
+    const root = studio.element.shadowRoot;
+    assert.match(root.textContent, /Библиотека · 1/);
+    assert.match(root.textContent, /Сейчас в запросе: 42 ток\./);
+    assert.match(root.querySelector('.ku-names-card summary').textContent, /Рён Хайтани.*не все падежи/);
+    // Add a name with other spellings.
+    const [name, aliases] = root.querySelectorAll('.ku-names-add input');
+    name.value = 'Манджиро Сано';
+    name.dispatchEvent(new window.Event('input'));
+    aliases.value = 'Майки, Манджиро';
+    aliases.dispatchEvent(new window.Event('input'));
+    [...root.querySelectorAll('button')].find(item => item.textContent === 'Добавить').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(calls[0], ['add', { name: 'Манджиро Сано', aliases: ['Майки', 'Манджиро'], gender: '', folderId: '' }]);
+    // A form typed into a card goes as one word.
+    const details = root.querySelector('.ku-names-card');
+    details.open = true;
+    const dative = details.querySelector('input[aria-label="Рён: дат."]');
+    dative.value = 'Рёну';
+    dative.dispatchEvent(new window.Event('change'));
+    assert.deepEqual(calls.at(-1), ['update', { id: 'n1', patch: { words: [{ word: 'Рён', dat: 'Рёну' }] } }]);
+    // A word that does not decline has no form fields.
+    assert.equal(details.querySelectorAll('.ku-names-word')[1].querySelector('.ku-names-forms'), null);
+    // «Выключить в этом чате».
+    const chat = [...root.querySelectorAll('.ku-names-opt input')][1];
+    chat.checked = true;
+    chat.dispatchEvent(new window.Event('change'));
+    assert.deepEqual(calls.at(-1), ['chat', { off: true }]);
+    // Bulk delete: tick, press once (it asks), press again.
+    const remove = () => [...root.querySelectorAll('.ku-names-bulk button')].find(item => /^(Удалить|Точно удалить)/.test(item.textContent));
+    assert.equal(remove().disabled, true);
+    root.querySelector('.ku-names-pick').click();
+    assert.match(remove().textContent, /Удалить \(1\)/);
+    remove().click();
+    assert.match(remove().textContent, /Точно удалить 1\?/);
+    assert.equal(calls.filter(call => call[0] === 'remove').length, 0, 'the first press deletes nothing');
+    remove().click();
+    assert.deepEqual(calls.at(-1), ['remove', { ids: ['n1'] }]);
+  } finally { studio?.destroy(); }
+});
+
+test('weather page: now, the week, the climate, ready scenarios, setting by hand', async () => {
+  const calls = [];
+  const snapshot = {
+    ...sampleState(),
+    world: { clock: { day: 5, time: '14:20' } },
+    weather: { kind: 'rain', temp: 14, text: 'моросит', source: 'set' },
+    weatherSet: { kind: 'rain', temp: 14, text: 'моросит', day: 5 },
+    weatherPlan: { climateId: 'tokyo', month: 0, scenarios: [{ id: 'typhoon-8', name: 'Тайфун', startDay: 8, days: 2, kind: 'storm', tempDelta: -3, text: 'шквал' }] },
+    weatherDated: false,
+    weatherClimates: [{ id: 'tokyo', name: 'Токио и центральная Япония', builtin: true, months: Array.from({ length: 12 }, () => ({ min: 2, max: 10, kinds: { clear: 5, rain: 2 } })) }],
+    weatherScenarios: [{ id: 'typhoon', name: 'Тайфун', days: 2, kind: 'storm', tempDelta: -3, text: 'шквал' }],
+    weatherWeek: [
+      { day: 5, date: '', kind: 'rain', temp: 14, source: 'set' },
+      { day: 6, date: '', kind: 'clear', temp: 9, source: 'forecast' },
+      { day: 8, date: '', kind: 'storm', temp: 6, source: 'scenario', scenario: 'Тайфун' },
+    ],
+  };
+  let studio;
+  const errors = captureErrors(() => {
+    studio = createRelationshipStudio({ store: { getSnapshot: () => snapshot }, open: true, layout: { mode: 'window', tab: 'weather' }, callbacks: {
+      onSetWeather: payload => { calls.push(['set', payload]); return Promise.resolve(); },
+      onWeatherScenario: payload => { calls.push(['scenario', payload]); return Promise.resolve(); },
+      onWeatherPlan: payload => { calls.push(['plan', payload]); return Promise.resolve(); },
+      onWeatherScenarioRemove: payload => { calls.push(['remove', payload]); return Promise.resolve(); },
+    } });
+  });
+  try {
+    assert.deepEqual(errors, [], errors.join('\n'));
+    const root = studio.element.shadowRoot;
+    assert.match(root.querySelector('.ku-wx-now').textContent, /Дождь · \+14°/);
+    assert.match(root.querySelector('.ku-wx-now').textContent, /моросит/);
+    assert.equal(root.querySelectorAll('.ku-wx-day').length, 3);
+    assert.match(root.querySelector('.ku-wx-day.scenario').textContent, /«Тайфун»/);
+    assert.match(root.textContent, /Даты истории нет/, 'no date: the month is asked for');
+    // By hand: pick a kind, type, apply.
+    [...root.querySelectorAll('.ku-wx-kinds button')].find(item => /Снег/.test(item.textContent)).click();
+    const [temp, text] = root.querySelectorAll('.ku-wx-fields input');
+    temp.value = '-2'; temp.dispatchEvent(new window.Event('input'));
+    text.value = 'мелкий снег'; text.dispatchEvent(new window.Event('input'));
+    [...root.querySelectorAll('button')].find(item => item.textContent === 'Задать погоду').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(calls.at(-1), ['set', { kind: 'snow', temp: '-2', text: 'мелкий снег', lock: false }]);
+    // A ready scenario from a day.
+    const start = root.querySelector('.ku-wx-scenario input');
+    start.value = '9'; start.dispatchEvent(new window.Event('input'));
+    [...root.querySelectorAll('.ku-wx-scenario button')][0].click();
+    assert.deepEqual(calls.at(-1), ['scenario', { templateId: 'typhoon', startDay: '9' }]);
+    // Hand the weather back to the forecast; take a scenario out.
+    [...root.querySelectorAll('button')].find(item => item.textContent === 'Вернуть прогнозу').click();
+    assert.deepEqual(calls.at(-1), ['set', { clear: true }]);
+    root.querySelector('.ku-fact button').click();
+    assert.deepEqual(calls.at(-1), ['remove', { id: 'typhoon-8' }]);
+  } finally { studio?.destroy(); }
+});
+
+test('names page: folders hold names, switch as a whole, and the ticked ones are switched and moved together', async () => {
+  const calls = [];
+  const word = text => ({ word: text, same: true, gen: '', dat: '', acc: '', ins: '', pre: '' });
+  const entry = (id, name, folderId, off = false) => ({ id, name, aliases: [], gender: '', off, folderId, words: [word(name)] });
+  const snapshot = {
+    ...sampleState(),
+    names: { version: 1, enabled: true, folders: [{ id: 'f1', name: 'Токийские мстители', off: false }, { id: 'f2', name: 'Магическая битва', off: true }], entries: [entry('a', 'Майки', 'f1'), entry('b', 'Санзу', 'f1'), entry('c', 'Юта', 'f2'), entry('d', 'Мими', '')] },
+  };
+  let studio;
+  const errors = captureErrors(() => {
+    studio = createRelationshipStudio({ store: { getSnapshot: () => snapshot }, open: true, layout: { mode: 'window', tab: 'names' }, callbacks: {
+      onNamesFolderAdd: payload => { calls.push(['folder-add', payload]); return Promise.resolve(); },
+      onNamesFolderUpdate: payload => { calls.push(['folder-update', payload]); return Promise.resolve(); },
+      onNamesFolderRemove: payload => { calls.push(['folder-remove', payload]); return Promise.resolve(); },
+      onNamesBulk: payload => { calls.push(['bulk', payload]); return Promise.resolve(); },
+    } });
+  });
+  try {
+    assert.deepEqual(errors, [], errors.join('\n'));
+    const root = studio.element.shadowRoot;
+    const groups = [...root.querySelectorAll('.ku-names-group')];
+    assert.deepEqual(groups.map(group => group.querySelector('.ku-names-folder-name, .ku-names-folder-title').value ?? group.querySelector('.ku-names-folder-title').textContent), ['Токийские мстители', 'Магическая битва', 'Без папки']);
+    assert.deepEqual(groups.map(group => group.querySelectorAll('.ku-names-card').length), [2, 1, 1]);
+    assert.ok(groups[1].querySelector('.ku-names-folder.off'), 'the folder is off');
+    assert.ok(groups[1].querySelector('.ku-names-card.off'), 'its names look off too');
+    // A new folder.
+    const input = root.querySelector('.ku-names-bulk input');
+    input.value = 'One Piece';
+    [...root.querySelectorAll('.ku-names-bulk button')].find(item => item.textContent === 'Создать папку').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(calls.at(-1), ['folder-add', { name: 'One Piece' }]);
+    // The whole folder off, renamed, deleted.
+    groups[0].querySelector('.ku-names-send').click();
+    assert.deepEqual(calls.at(-1), ['folder-update', { id: 'f1', off: true }]);
+    const name = groups[0].querySelector('.ku-names-folder-name');
+    name.value = 'ТМ';
+    name.dispatchEvent(new window.Event('change'));
+    assert.deepEqual(calls.at(-1), ['folder-update', { id: 'f1', name: 'ТМ' }]);
+    groups[0].querySelector('.ku-names-folder button[title^="Удалить папку"]').click();
+    assert.deepEqual(calls.at(-1), ['folder-remove', { id: 'f1' }]);
+    // Tick the whole first folder: switch off / on / move.
+    const barButton = label => [...root.querySelectorAll('.ku-names-bulk button')].find(item => item.textContent === label);
+    assert.equal(barButton('Выключить').disabled, true, 'nothing ticked yet');
+    root.querySelectorAll('.ku-names-group')[0].querySelector('.ku-names-folder .ku-names-pick').click();
+    barButton('Выключить').click();
+    assert.deepEqual(calls.at(-1), ['bulk', { ids: ['a', 'b'], off: true }]);
+    barButton('Включить').click();
+    assert.deepEqual(calls.at(-1), ['bulk', { ids: ['a', 'b'], off: false }]);
+    const move = root.querySelector('.ku-names-move');
+    move.value = 'f2';
+    move.dispatchEvent(new window.Event('change'));
+    assert.deepEqual(calls.at(-1), ['bulk', { ids: ['a', 'b'], folderId: 'f2' }]);
+  } finally { studio?.destroy(); }
+});
+
+test('dice page: groups with their options, switching, hiding and adding your own', async () => {
+  const calls = [];
+  const snapshot = {
+    ...sampleState(),
+    dice: { avoidRepeat: true, historyCount: 2, groups: [
+      { id: 'pace', label: 'Темп', icon: '🕰', off: false, options: [{ id: 'tender', text: 'нежно', hidden: false }, { id: 'rough', text: 'грубо', hidden: true }, { id: 'c1', text: 'под дождём', hidden: false, custom: true }] },
+      { id: 'mood', label: 'Настроение', icon: '🎭', off: true, options: [{ id: 'shy', text: 'смущённо', hidden: false }] },
+    ] },
+  };
+  let studio;
+  const errors = captureErrors(() => {
+    studio = createRelationshipStudio({ store: { getSnapshot: () => snapshot }, open: true, layout: { mode: 'window', tab: 'dice' }, callbacks: {
+      onDiceSettings: payload => { calls.push(payload.patch); return Promise.resolve(); },
+    } });
+  });
+  try {
+    assert.deepEqual(errors, [], errors.join('\n'));
+    const root = studio.element.shadowRoot;
+    assert.match(root.textContent, /персона никогда не ведёт/);
+    assert.equal(root.querySelectorAll('.ku-dice-group').length, 2);
+    assert.ok(root.querySelectorAll('.ku-dice-group')[1].classList.contains('off'));
+    assert.ok(root.querySelector('.ku-dice-option.off'), 'a hidden option looks struck out');
+    const groups = [...root.querySelectorAll('.ku-dice-group')];
+    // Hide an option.
+    groups[0].querySelectorAll('.ku-dice-option input')[0].click();
+    assert.deepEqual(calls.at(-1), { group: 'pace', option: 'tender', hidden: true });
+    // Switch a group.
+    groups[1].querySelector('.ku-dice-head input').click();
+    assert.deepEqual(calls.at(-1), { group: 'mood', off: false });
+    // Add your own.
+    const input = groups[0].querySelector('.row input');
+    input.value = 'в тишине';
+    input.dispatchEvent(new window.Event('input'));
+    [...groups[0].querySelectorAll('button')].find(item => item.textContent === 'Добавить').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(calls.at(-1), { group: 'pace', addCustom: 'в тишине' });
+    // Remove an own one; forget the history.
+    groups[0].querySelector('.ku-dice-option button').click();
+    assert.deepEqual(calls.at(-1), { group: 'pace', removeCustom: 'c1' });
+    [...root.querySelectorAll('button')].find(item => /Забыть прошлые броски \(2\)/.test(item.textContent)).click();
+    assert.deepEqual(calls.at(-1), { clearHistory: true });
+  } finally { studio?.destroy(); }
+});
+
+test('own calendar: the grid follows its weekdays and months, dates are typed as day / month / year', async () => {
+  const { normalizeSystem } = await import('../src/core/calendar-system.js');
+  const system = normalizeSystem({
+    id: 's1', name: 'Мой мир', era: 'эры Огня', startWeekday: 1,
+    weekdays: ['Первень', 'Второй', 'Третий', 'Четвёртый', 'Пятый'].map(name => ({ name, short: name.slice(0, 2) })),
+    seasons: [{ id: 'warm', name: 'Тепло', min: 14, max: 24, kinds: { clear: 4 } }],
+    months: [{ name: 'Льдов', days: 20, season: 'warm' }, { name: 'Цветов', days: 25, season: 'warm' }],
+  });
+  const calls = [];
+  const snapshot = {
+    ...sampleState(),
+    world: { clock: { day: 3, time: '14:20' } },
+    calendarToday: '0014-02-03',
+    calendar: { anchor: '0014-02-01', system, events: [{ id: 'e1', title: 'Праздник цветов', date: '0014-02-03', repeat: 'none', must: true }] },
+    calendarTemplates: [],
+    calendarSystems: [{ ...system, ready: true, id: 'ready-x', name: 'Готовый' }, { ...system, id: 'mine', name: 'Мой сохранённый' }],
+  };
+  let studio;
+  const errors = captureErrors(() => {
+    studio = createRelationshipStudio({ store: { getSnapshot: () => snapshot }, open: true, layout: { mode: 'window', tab: 'calendar' }, callbacks: {
+      onCalendarSaveEvent: payload => { calls.push(['event', payload]); return Promise.resolve(); },
+      onCalendarSetToday: payload => { calls.push(['today', payload]); return Promise.resolve(); },
+    } });
+  });
+  try {
+    assert.deepEqual(errors, [], errors.join('\n'));
+    const root = studio.element.shadowRoot;
+    assert.deepEqual([...root.querySelectorAll('.ku-cal-head')].map(node => node.textContent), ['Пе', 'Вт', 'Тр', 'Че', 'Пя']);
+    assert.match(root.querySelector('.ku-cal-title').textContent, /Цветов 14 эры Огня/);
+    // Month 2 of year 14 has 25 days in a five-day week: five full rows, and day 3 is marked.
+    assert.equal(root.querySelectorAll('.ku-cal-cell').length, 25);
+    assert.ok(root.querySelector('.ku-cal-cell.today.must'));
+    assert.match(root.textContent, /Сегодня в истории: .*3 Цветов, 14 год эры Огня/);
+    // The date of the story is three fields, not the browser's picker.
+    const today = root.querySelector('.ku-cal-date');
+    assert.ok(today, 'day / month / year');
+    assert.equal(root.querySelector('input[type="date"]'), null);
+    assert.equal(today.value, '0014-02-03');
+    const [day] = today.querySelectorAll('input');
+    day.value = '7';
+    assert.equal(today.value, '0014-02-07');
+    [...root.querySelectorAll('button')].find(item => item.textContent === 'Запомнить').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(calls.at(-1), ['today', { date: '0014-02-07' }]);
+    // The template block explains why it is not here.
+    assert.match(root.textContent, /Шаблоны и генератор года сделаны для земного календаря/);
+    // Next month of the last month: the year goes up.
+    const next = [...root.querySelectorAll('button')].find(item => item.getAttribute('title') === 'Следующий месяц');
+    next.click();
+    assert.match(root.querySelector('.ku-cal-title').textContent, /Льдов 15/);
+  } finally { studio?.destroy(); }
+});
+
+test('calendar builder: make one, change it, apply with a second press, keep it, copy a ready one', async () => {
+  const calls = [];
+  const snapshot = {
+    ...sampleState(),
+    world: { clock: { day: 0, time: '' } },
+    calendarToday: '',
+    calendar: { anchor: '', events: [] },
+    calendarTemplates: [],
+    calendarSystems: [{
+      id: 'ready-x', name: 'Готовый мир', ready: true, startWeekday: 1,
+      weekdays: [{ name: 'Раз', short: 'Рз' }, { name: 'Два', short: 'Дв' }],
+      seasons: [{ id: 'a', name: 'Весна', min: 5, max: 15, kinds: { rain: 2 } }],
+      months: [{ name: 'Месяц-один', days: 40, season: 'a' }],
+    }],
+  };
+  let studio;
+  const errors = captureErrors(() => {
+    studio = createRelationshipStudio({ store: { getSnapshot: () => snapshot }, open: true, layout: { mode: 'window', tab: 'calendar' }, callbacks: {
+      onCalendarSetSystem: payload => { calls.push(['set', payload]); return Promise.resolve(); },
+      onCalendarSaveSystem: payload => { calls.push(['save', payload]); return Promise.resolve('id'); },
+    } });
+  });
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+  try {
+    assert.deepEqual(errors, [], errors.join('\n'));
+    const root = studio.element.shadowRoot;
+    const press = label => [...root.querySelectorAll('button')].find(item => item.textContent === label);
+    assert.match(root.textContent, /земной календарь/);
+    press('Создать свой календарь').click();
+    assert.equal(root.querySelectorAll('.ku-cb-editor .ku-cb-row').length, 7 + 12, 'seven weekdays and twelve months to start from');
+    assert.equal(root.querySelectorAll('.ku-cb-season').length, 4);
+    // Change the name, a weekday and a month; add a month; remove a weekday.
+    const name = root.querySelector('.ku-cb-editor input[aria-label="Название календаря"]');
+    name.value = 'Мир Пепла';
+    name.dispatchEvent(new window.Event('input'));
+    const dayName = root.querySelector('.ku-cb-editor input[aria-label="День недели 1: название"]');
+    dayName.value = 'Солнцедень';
+    dayName.dispatchEvent(new window.Event('input'));
+    press('+ Месяц').click();
+    assert.equal(root.querySelectorAll('.ku-cb-month').length, 13);
+    root.querySelector('.ku-cb-editor button[title="Убрать день недели"]').click();
+    assert.equal(root.querySelectorAll('.ku-cb-editor .ku-cb-row:not(.ku-cb-month)').length, 6);
+    // A season's weather is taken from a ready climate.
+    root.querySelector('.ku-cb-season button[title^="Скопировать температуру"]').click();
+    assert.match(root.querySelector('.ku-cb-season summary').textContent, /-?\d+…-?\d+°/);
+    // Apply: the first press only asks.
+    press('Применить к этому чату').click();
+    assert.equal(calls.length, 0);
+    press('Точно применить? Дата и события чата очистятся').click();
+    await settle();
+    assert.equal(calls.at(-1)[0], 'set');
+    const applied = calls.at(-1)[1].system;
+    assert.equal(applied.name, 'Мир Пепла');
+    assert.equal(applied.weekdays.length, 6);
+    assert.equal(applied.weekdays[0].name, 'День 2', 'the first weekday was removed (the renamed one with it)');
+    assert.equal(applied.months.length, 13);
+    assert.ok(applied.seasons[0].kinds, 'the weather of the first season is in');
+    // Keep in the library.
+    press('Создать свой календарь').click();
+    press('Сохранить в библиотеку').click();
+    await settle();
+    assert.equal(calls.at(-1)[0], 'save');
+    // A ready calendar: «Копию править» makes a new calendar; «Применить» asks twice.
+    press('Закрыть редактор').click();
+    press('Копию править').click();
+    assert.match(root.querySelector('.ku-cb-editor input[aria-label="Название календаря"]').value, /Готовый мир \(моя копия\)/);
+    press('Закрыть редактор').click();
+    [...root.querySelectorAll('.ku-fact button')].find(item => item.textContent === 'Применить').click();
+    assert.equal(calls.filter(call => call[0] === 'set').length, 1, 'the first press only asks');
+    [...root.querySelectorAll('.ku-fact button')].find(item => /^Точно/.test(item.textContent)).click();
+    await settle();
+    assert.equal(calls.at(-1)[1].system.id, 'ready-x');
   } finally { studio?.destroy(); }
 });

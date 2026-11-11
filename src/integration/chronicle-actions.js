@@ -3,10 +3,10 @@
  * time, never during a generation), and the Studio's callbacks.
  */
 import {
-  CHRONICLE_PRESETS, chronicleConfig, chronicleStats, editSummary, markStale, pinSummary, rebuildScene, removeScene, unfoldSummary,
+  CHRONICLE_PRESETS, chronicleConfig, chronicleStats, editSummary, looksRefused, markStale, pinSummary, rebuildScene, refusedSummaries, removeScene, removeSummary, unfoldSummary,
 } from '../core/index.js';
 import {
-  buildSceneRequest, compressSelected, fingerprintTexts, parseSummaryText, pendingCount, releaseScene, runChronicle, sceneMessages, staleSceneOf, transcript,
+  RefusedError, buildSceneRequest, compressSelected, fingerprintTexts, messagesOfScenes, parseSummaryText, pendingCount, releaseScene, runChronicle, sceneMessages, staleSceneOf, transcript,
 } from './chronicle-run.js';
 import { withBusy } from './busy.js';
 
@@ -94,6 +94,7 @@ export function createChronicleRunner(deps) {
         config,
         presets: CHRONICLE_PRESETS,
         chronicle: deps.chronicle(),
+        refused: refusedSummaries(deps.chronicle()),
         stats: { ...chronicleStats(deps.chronicle(), deps.chat()?.length ?? 0), ...waiting(pendingCount(deps.chat(), config), config) },
         running: Boolean(running),
       };
@@ -138,6 +139,45 @@ export function createChronicleRunner(deps) {
       deps.refresh();
       return true;
     },
+    /**
+     * Delete a summary of any level. A scene (or everything under a chapter or arc) gives its messages back
+     * to the model for good: they are marked «keep» and never summarized again.
+     */
+    onChronicleRemove: async ({ id }) => {
+      const chronicle = deps.chronicle();
+      const item = chronicle.summaries.find(summary => summary.id === id);
+      if (!item) return false;
+      const { chronicle: next, sceneIds } = removeSummary(chronicle, id);
+      const count = messagesOfScenes(deps.chat(), sceneIds);
+      const what = item.level === 0 && !item.childIds ? 'Сводка сцены' : `${item.level === 1 ? 'Глава' : 'Арка'} вместе с ${sceneIds.length} сценами`;
+      const ok = await deps.confirm('Удалить сводку', `${what} удалится. ${count ? `${count} сообщений снова пойдут модели целиком и больше не сжимаются. ` : ''}Вернуть сводку можно будет только отменой в истории изменений вручную: она не восстанавливается.`);
+      if (!ok) return false;
+      for (const sceneId of sceneIds) releaseScene(deps.chat(), sceneId);
+      await deps.saveChat();
+      await deps.save(next);
+      deps.refresh();
+      return true;
+    },
+    /** All summaries whose text is a refusal or an API error, in one go. */
+    onChronicleRemoveRefused: async () => {
+      let chronicle = deps.chronicle();
+      const ids = refusedSummaries(chronicle);
+      if (!ids.length) return 0;
+      const ok = await deps.confirm('Удалить отказы модели', `Сводок, в которых вместо пересказа ответ фильтра или ошибка: ${ids.length}. Они удалятся, а сообщения этих сцен снова пойдут модели целиком.`);
+      if (!ok) return 0;
+      let removed = 0;
+      for (const id of ids) {
+        if (!chronicle.summaries.some(summary => summary.id === id)) continue;
+        const result = removeSummary(chronicle, id);
+        for (const sceneId of result.sceneIds) releaseScene(deps.chat(), sceneId);
+        chronicle = result.chronicle;
+        removed += 1;
+      }
+      await deps.saveChat();
+      await deps.save(chronicle);
+      deps.refresh();
+      return removed;
+    },
     /** Rewrite a stale scene from its messages as they are now. */
     onChronicleRebuild: async ({ id }) => {
       const chat = deps.chat();
@@ -146,7 +186,10 @@ export function createChronicleRunner(deps) {
       const chatKey = deps.chatKey();
       const raw = await withBusy('хроника: пересборка сцены…', () => deps.context().generateRaw({ prompt: buildSceneRequest(transcript(chat, indices), { persona: deps.persona() }), trimNames: false }));
       const text = parseSummaryText(raw);
-      if (!text) throw new Error('Модель вернула пустую сводку');
+      if (!text) {
+        const said = String(typeof raw === 'string' ? raw : raw?.text ?? raw?.message ?? '').trim();
+        throw looksRefused(said) ? new RefusedError(said) : new Error('Модель вернула пустую сводку');
+      }
       if (deps.chatKey() !== chatKey) return false;
       await deps.save(rebuildScene(deps.chronicle(), id, { text, fingerprint: fingerprintTexts(indices.map(index => String(chat[index].mes))) }));
       deps.refresh();

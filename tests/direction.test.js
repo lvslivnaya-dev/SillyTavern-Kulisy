@@ -160,3 +160,31 @@ test('an empty new scene is allowed (the narrator decides); a note needs text', 
   assert.match(buildDirectionPrompt(state, note), /Note for the narrator: короче, больше атмосферы/);
   assert.equal(cueLabel(note.cues[0], () => ''), 'рассказчику: короче, больше атмосферы');
 });
+
+test('recall cue: needs text, the same text is armed once, and it tells the narrator to bring it back', async () => {
+  const { armCue, startGeneration, buildDirectionPrompt, cueLabel } = await import('../src/core/direction.js');
+  assert.throws(() => armCue({ cues: [] }, { kind: 'recall', text: '' }));
+  let direction = armCue({ cues: [] }, { kind: 'recall', text: 'Поцелуй под дождём' });
+  direction = armCue(direction, { kind: 'recall', text: 'Поцелуй под дождём' });
+  direction = armCue(direction, { kind: 'recall', text: 'Клятва на крыше' });
+  assert.equal(direction.cues.length, 2);
+  assert.equal(cueLabel(direction.cues[0], () => ''), 'вспомнить: Поцелуй под дождём');
+  const fired = startGeneration(direction, 'normal').direction;
+  const prompt = buildDirectionPrompt({ entities: {} }, fired);
+  assert.match(prompt, /Bring this back into play in this reply: «Поцелуй под дождём»/);
+  assert.equal(startGeneration(fired, 'normal').direction.cues.length, 0, 'сгорает на следующем ходу');
+});
+
+test('an event with a genre tells the narrator the genre and keeps the label for the badge', () => {
+  const state = createDefaultState();
+  const direction = armCue({ cues: [] }, { kind: 'event', genre: 'pressure' }, []);
+  const cue = direction.cues[0];
+  assert.equal(cue.genre, 'pressure');
+  assert.equal(cue.text, 'Психологическое давление');
+  assert.equal(armCue({ cues: [] }, { kind: 'event', genre: 'nonsense' }, []).cues[0].genre, undefined);
+  const forced = startGeneration(direction, 'normal').direction;
+  assert.match(buildDirectionPrompt(state, forced), /genre: psychological pressure/);
+  const detailed = startGeneration(armCue({ cues: [] }, { kind: 'event', genre: 'fight', text: 'за ужином' }, []), 'normal').direction;
+  assert.match(buildDirectionPrompt(state, detailed), /Details: за ужином/);
+  assert.match(cueLabel(cue, id => id), /Психологическое давление/);
+});

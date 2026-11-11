@@ -64,7 +64,7 @@ test('parseKnowledge keeps good items, drops bad ones, never throws', () => {
     met: [{ ids: ['a', 'b'], status: 'friends' }, { ids: ['a', 'b'], status: 'known' }],
     leaks: [{ entityId: 'c', eventId: 'e', quote: 'x'.repeat(500) }],
   });
-  assert.deepEqual(parsed.scene, { presentIds: ['a', 'b'], location: 'склад' });
+  assert.deepEqual(parsed.scene, { presentIds: ['a', 'b'], entered: [], left: [], location: 'склад', lore: null });
   assert.deepEqual(parsed.events, [{ key: 'n1', text: 'Признание', witnessIds: ['a'], secret: false }]);
   assert.deepEqual(parsed.learned, [{ eventId: 'e', entityId: 'c', source: 'told' }]);
   assert.deepEqual(parsed.met, [{ ids: ['a', 'b'], status: 'known' }]);
@@ -138,6 +138,17 @@ test('an unchanged scene writes nothing; swiping the reply restores everything',
   assert.deepEqual(back.knowledge, world().knowledge);
 });
 
+test('who came and went wins over a cast list the model merely repeated', () => {
+  // world(): Майки, Дракен and Судзу are in the garage; Ран is elsewhere.
+  const same = [mikey.id, draken.id, suzu.id];
+  const cast = scene => analyse(world(), parseKnowledge({ scene })).state.knowledge.scene.presentIds;
+  assert.deepEqual(cast({ presentIds: same, entered: [ran.id] }), [...same, ran.id].sort(), 'вошёл, а список повторён старый');
+  assert.deepEqual(cast({ presentIds: same, left: [draken.id] }), [mikey.id, suzu.id].sort(), 'ушёл, а в списке остался');
+  assert.deepEqual(cast({ entered: [ran.id], left: [suzu.id] }), [mikey.id, draken.id, ran.id].sort(), 'списка нет вовсе');
+  assert.deepEqual(cast({ presentIds: same, entered: [ran.id], left: [ran.id] }), same.slice().sort(), 'зашёл и вышел за один ответ');
+  assert.equal(parseKnowledge({ scene: { location: 'мост' } }).scene, null);
+});
+
 test('a new event repeating a known one maps onto it instead of duplicating', () => {
   const { state } = analyse(world(), parseKnowledge({
     events: [{ key: 'n1', text: 'Драка  у  моста', witnessIds: [suzu.id] }],
@@ -155,7 +166,7 @@ test('trackKnowledge off: the chronicle is ignored', () => {
 });
 
 test('materializeKnowledge with nothing to do is a no-op', () => {
-  assert.deepEqual(materializeKnowledge(null, {}), { leaks: [], deaths: [], reveals: [] });
+  assert.deepEqual(materializeKnowledge(null, {}), { leaks: [], deaths: [], reveals: [], secrets: [] });
 });
 
 function fakeModel(reply) {

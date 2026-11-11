@@ -644,6 +644,27 @@ export function createWorldPages(ctx) {
       button('Включить', 'btn primary small', () => attempt(() => invoke('onChronicleSettings', { changes: { enabled: true } }), 'Хроника включена')),
     ]));
     const byId = new Map(chronicle.summaries.map(item => [item.id, item]));
+    const refused = new Set(info.refused ?? []);
+    if (refused.size) {
+      view.append(element('div', { className: 'card ku-leak-card', role: 'alert' }, [
+        element('strong', { text: `Модель отказалась писать сводки: ${refused.size}` }),
+        element('p', { className: 'muted', text: 'Вместо пересказа в них записан ответ фильтра или ошибка («The prompt could not be submitted…»). Такой текст уходит модели как «история», поэтому лучше убрать. Новые отказы больше не записываются, а показываются ошибкой.' }),
+        element('div', { className: 'record-actions' }, [
+          button('Удалить все отказы', 'btn primary small', () => attempt(() => invoke('onChronicleRemoveRefused', {}), count => (count ? `Удалено сводок: ${count}` : 'Ничего не удалено')), 'Сводки удалятся, сообщения этих сцен снова пойдут модели целиком'),
+          button('Пересобрать сцены', 'btn small', async () => {
+            let done = 0;
+            let failed = '';
+            for (const id of refused) {
+              const item = byId.get(id);
+              if (!item || item.level !== 0 || item.childIds) continue;
+              try { await invoke('onChronicleRebuild', { id }); done += 1; } catch (error) { failed = error?.message || String(error); break; }
+            }
+            if (failed) setStatus(failed, true); else setStatus(done ? `Пересобрано сцен: ${done}` : 'Пересобирать нечего: отказы только в главах и арках, их можно удалить');
+            render();
+          }, 'Попросить модель написать эти сцены заново (на другой модели это может получиться; остановится на первом новом отказе)'),
+        ]),
+      ]));
+    }
     const active = chronicle.summaries.filter(item => !item.parentId).sort((left, right) => left.seq - right.seq);
     const picked = [...pickedSummaries].map(id => byId.get(id)).filter(item => item && !item.parentId);
     const compress = button(`Сжать выбранные (${picked.length})`, 'btn small', () => attempt(() => invoke('onChronicleCompress', { ids: picked.map(item => item.id) }).then(result => { pickedSummaries.clear(); return result; }), 'Сжато'));
@@ -658,12 +679,14 @@ export function createWorldPages(ctx) {
         chip(LABEL[item.level], item.level ? 'told' : ''),
         element('span', { className: 'muted ku-small', text: item.childIds ? `из ${item.childIds.length}` : `${item.messageCount ?? '?'} сообщ.` }),
         ...(item.stale ? [chip('устарела', 'warn')] : []),
+        ...(refused.has(item.id) ? [chip('отказ модели', 'warn')] : []),
         ...(item.edited ? [chip('правлена')] : []),
         element('span', { className: 'ku-push' }),
-        ...(item.stale ? [button('Пересобрать', 'btn small', () => attempt(() => invoke('onChronicleRebuild', { id: item.id }), 'Сцена пересобрана'))] : []),
+        ...(item.stale || (refused.has(item.id) && item.level === 0 && !item.childIds) ? [button('Пересобрать', 'btn small', () => attempt(() => invoke('onChronicleRebuild', { id: item.id }), 'Сцена пересобрана'))] : []),
         iconButton('lock', item.pinned ? 'Открепить: можно сжимать' : 'Закрепить: не сжимать', () => attempt(() => invoke('onChroniclePin', { id: item.id, pinned: !item.pinned })), item.pinned),
         iconButton('edit', 'Изменить', () => { editingSummaryId = item.id; render(); }),
         iconButton('expand', item.childIds ? 'Развернуть на части' : 'Развернуть в сообщения', () => attempt(() => invoke('onChronicleUnfold', { id: item.id }))),
+        iconButton('trash', item.childIds ? 'Удалить вместе с частями' : 'Удалить сводку', () => attempt(() => invoke('onChronicleRemove', { id: item.id }), removed => (removed ? 'Сводка удалена' : 'Не удалено'))),
       ]);
       node.append(head);
       if (editingSummaryId === item.id) {

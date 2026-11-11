@@ -4,7 +4,8 @@
  *     («пнуть» a character, a scene event). Opened, it stays open until its arrow is clicked;
  *   - a note under a reply where the chronicler found a leak, with its three answers;
  *   - a note under a reply where a character seems to die: mark it, or not;
- *   - a note under a reply where someone seems to learn a lorebook secret: mark it, or not.
+ *   - a note under a reply where someone seems to learn a lorebook secret: mark it, or not;
+ *   - a note under a reply where the chronicler thinks something is a secret: open the window to check it, or not.
  *
  * It lives in ST's DOM (not a shadow root), so it is styled by style.css with
  * ST theme variables only. All markup is built with textContent: names and
@@ -15,6 +16,7 @@ const LEAK_CLASS = 'ku-leak';
 const SLIP_CLASS = 'ku-slip';
 const DEATH_CLASS = 'ku-death-note-chat';
 const REVEAL_CLASS = 'ku-reveal-note';
+const SECRET_HINT_CLASS = 'ku-secret-hint';
 
 function node(tag, className, text) {
   const element = document.createElement(tag);
@@ -32,6 +34,17 @@ function actionButton(label, action, data, title) {
   return button;
 }
 
+import { WEATHER_KINDS, WEATHER_KIND_IDS } from '../core/weather.js';
+import { EVENT_GENRES } from '../core/direction.js';
+
+const MODE_LABEL = { calm: 'Быт', fight: 'Бой', intim: 'Близость' };
+const MODE_MARK = { calm: '☕', fight: '⚔', intim: '🔥' };
+const MODE_HINT = {
+  calm: 'Обычная сцена: быт и разговор',
+  fight: 'Бой: модели уходят боевые разделы анкет',
+  intim: 'Близость: модели уходят разделы анкет для интимных сцен',
+};
+
 function chipButton(text, action, data = {}, title = '', className = 'ku-dir-btn') {
   const button = node('button', className, text);
   button.type = 'button';
@@ -45,6 +58,10 @@ function chipButton(text, action, data = {}, title = '', className = 'ku-dir-btn
  * view = {
  *   chips: boolean,                       // the setting
  *   cast: [{ id, name, present, persona, silent, badges }],
+ *   dice: { groups: [{ id, label, icon, multi, options: [{ id, text, custom }] }], picks: [{ group, id, text }], locked: [groupId], sent } | null,
+ *   clock: { time: 'HH:MM', day, label },            // the story clock the «Время» panel edits
+ *   weather: { kind, temp, source, badge } | null,   // the weather in force; the drawer shows it and sets it
+ *   sceneMode: 'calm' | 'fight' | 'intim',   // the kind of scene (decides which lorebook sections go out)
  *   location: string, time: string, secrets: number, waitingReveals: number,
  *   director: { open, silenceAfter, hotkeys, canKick, favorites: [text],
  *               cues: [{ id, entityId, label, badge, used, wait }], others: [{ id, name }] },
@@ -55,10 +72,10 @@ function chipButton(text, action, data = {}, title = '', className = 'ku-dir-btn
  *                  secrets: [{ eventId, label, text }] }
  * eventIdeas() → [text]: today's calendar events, offered as ready scene events.
  */
-export function mountChatOverlay({ onTogglePresent, onLeak, onSlip, onDeath, onReveal, onOpenStudio,
+export function mountChatOverlay({ onDiceRoll, onDiceToggle, onDiceLock, onDiceAdd, onDiceSend, onDiceClear, onSetTime, onWeather, onSceneMode, onTogglePresent, onLeak, onSlip, onDeath, onReveal, onSecretHint, onOpenStudio,
   onCue, onRemoveCue, onKickNow, onToggleOpen, onFavorite, describe, eventIdeas }) {
   // The panel's own state: what is selected and typed survives every re-render.
-  const fresh = () => ({ selected: '', pane: '', wait: 0, draft: '', eventDraft: '', sceneDraft: '', noteDraft: '', placeDraft: '', placeId: '', skip: 'none', sceneCast: [] });
+  const fresh = () => ({ diceAdd: '', diceDraft: '', clock: null, selected: '', pane: '', wait: 0, draft: '', eventDraft: '', sceneDraft: '', noteDraft: '', placeDraft: '', placeId: '', skip: 'none', sceneCast: [] });
   const ui = fresh();
   let lastView = null;
   let lastMenu = null;
@@ -82,8 +99,49 @@ export function mountChatOverlay({ onTogglePresent, onLeak, onSlip, onDeath, onR
     };
   };
 
+  /** The drafts of the «Время» panel; they start from the clock and survive re-renders. */
+  const clockDraft = () => {
+    ui.clock ??= { time: lastView?.clock?.time ?? '', day: lastView?.clock?.day ? String(lastView.clock.day) : '', label: lastView?.clock?.label ?? '' };
+    return ui.clock;
+  };
+  function saveClock() {
+    const draft = clockDraft();
+    Promise.resolve(onSetTime?.({ time: draft.time.trim(), day: draft.day.trim(), label: draft.label.trim() }))
+      .then(ok => { if (ok !== false) { ui.clock = null; rerender(); } });
+  }
+  /** «+1 ч»: whole minutes forward; past midnight the day goes up too (when the day is known). */
+  function shiftClock(minutes) {
+    const draft = clockDraft();
+    const match = /^(\d{1,2}):(\d{2})$/.exec(draft.time.trim());
+    if (!match || !Number.isFinite(minutes)) return;
+    const total = Number(match[1]) * 60 + Number(match[2]) + minutes;
+    const days = Math.floor(total / 1440);
+    const within = ((total % 1440) + 1440) % 1440;
+    draft.time = `${String(Math.floor(within / 60)).padStart(2, '0')}:${String(within % 60).padStart(2, '0')}`;
+    if (days && Number(draft.day) > 0) draft.day = String(Number(draft.day) + days);
+    saveClock();
+  }
+
   function directorAction(action, data) {
     switch (action) {
+      case 'dir-weather': Promise.resolve(onWeather?.({ kind: data.kind, lock: lastView?.weather?.source === 'lock' })).then(() => rerender()); return true;
+      case 'dir-weather-lock': Promise.resolve(onWeather?.({ kind: lastView?.weather?.kind, temp: lastView?.weather?.temp, lock: lastView?.weather?.source !== 'lock' })).then(() => rerender()); return true;
+      case 'dir-dice-roll': Promise.resolve(onDiceRoll?.({ only: data.group || '' })).then(() => rerender()); return true;
+      case 'dir-dice-pick': Promise.resolve(onDiceToggle?.({ group: data.group, option: data.option })).then(() => rerender()); return true;
+      case 'dir-dice-lock': Promise.resolve(onDiceLock?.({ group: data.group })).then(() => rerender()); return true;
+      case 'dir-dice-send': Promise.resolve(onDiceSend?.()).then(() => rerender()); return true;
+      case 'dir-dice-clear': Promise.resolve(onDiceClear?.()).then(() => rerender()); return true;
+      case 'dir-dice-add-open': ui.diceAdd = ui.diceAdd === data.group ? '' : data.group; ui.diceDraft = ''; rerender(); return true;
+      case 'dir-dice-add-save': {
+        const text = ui.diceDraft.trim();
+        if (!text) return true;
+        const group = ui.diceAdd;
+        Promise.resolve(onDiceAdd?.({ group, text })).then(() => { ui.diceAdd = ''; ui.diceDraft = ''; rerender(); });
+        return true;
+      }
+      case 'dir-clock-save': saveClock(); return true;
+      case 'dir-clock-shift': shiftClock(Number(data.minutes)); return true;
+      case 'dir-mode': Promise.resolve(onSceneMode?.(data.mode)).then(() => rerender()); return true;
       case 'dir-toggle': onToggleOpen?.(!lastView?.director?.open); return true;
       case 'dir-select':
         if (ui.selected === data.entityId) resetMenu(); else Object.assign(ui, { selected: data.entityId, pane: '', draft: '' });
@@ -91,7 +149,8 @@ export function mountChatOverlay({ onTogglePresent, onLeak, onSlip, onDeath, onR
         return true;
       case 'dir-pane':
         ui.pane = ui.pane === data.pane ? '' : data.pane;
-        if (['event', 'others', 'scene', 'note'].includes(data.pane)) ui.selected = '';
+        if (['event', 'others', 'scene', 'note', 'who', 'weather', 'mode', 'time', 'dice'].includes(data.pane)) ui.selected = '';
+        if (data.pane === 'time') ui.clock = null;
         rerender();
         return true;
       case 'dir-wait': ui.wait = Number(data.wait) || 0; rerender(); return true;
@@ -110,7 +169,7 @@ export function mountChatOverlay({ onTogglePresent, onLeak, onSlip, onDeath, onR
           if (!secret) return true;
           Object.assign(cue, { eventId: secret.eventId, text: secret.text, label: secret.label });
         }
-        if (data.kind === 'event') { delete cue.entityId; if (data.text) cue.text = data.text; }
+        if (data.kind === 'event') { delete cue.entityId; if (data.text) cue.text = data.text; if (data.genre) cue.genre = data.genre; }
         arm(cue);
         return true;
       }
@@ -156,6 +215,7 @@ export function mountChatOverlay({ onTogglePresent, onLeak, onSlip, onDeath, onR
       else if (action === 'present') onTogglePresent(entityId, target.dataset.present !== 'true');
       else if (action === 'studio') onOpenStudio?.(target.dataset.tab);
       else if (action.startsWith('reveal-')) onReveal?.(action.slice(7), { messageIndex: Number(messageIndex), entityId, eventId });
+      else if (action.startsWith('secret-')) onSecretHint?.(action.slice(7), { messageIndex: Number(messageIndex), eventId });
       else if (action.startsWith('death-')) onDeath?.(action.slice(6), { messageIndex: Number(messageIndex), entityId });
       else if (action.startsWith('slip-')) onSlip?.(action.slice(5), { messageIndex: Number(messageIndex), slipIndex: Number(slipIndex) });
       else onLeak(action, { messageIndex: Number(messageIndex), entityId, eventId });
@@ -173,6 +233,10 @@ export function mountChatOverlay({ onTogglePresent, onLeak, onSlip, onDeath, onR
     if (field === 'scene') ui.sceneDraft = event.target.value;
     if (field === 'note') ui.noteDraft = event.target.value;
     if (field === 'place') ui.placeDraft = event.target.value;
+    if (field === 'dice-add') ui.diceDraft = event.target.value;
+    if (field === 'clock-time') clockDraft().time = event.target.value;
+    if (field === 'clock-day') clockDraft().day = event.target.value;
+    if (field === 'clock-label') clockDraft().label = event.target.value;
     if (field === 'place-id') {
       ui.placeId = event.target.value;
       const place = (lastView?.director?.places ?? []).find(item => item.id === ui.placeId);
@@ -181,7 +245,7 @@ export function mountChatOverlay({ onTogglePresent, onLeak, onSlip, onDeath, onR
     }
   };
   // Enter sends from one-line fields; the scene's text is a textarea, Enter there is a new line.
-  const ENTER_ACTIONS = { custom: 'dir-custom', event: 'dir-event-custom', note: 'dir-note' };
+  const ENTER_ACTIONS = { custom: 'dir-custom', event: 'dir-event-custom', note: 'dir-note', 'dice-add': 'dir-dice-add-save', 'clock-time': 'dir-clock-save', 'clock-day': 'dir-clock-save', 'clock-label': 'dir-clock-save' };
   const onKey = event => {
     const action = ENTER_ACTIONS[event.target?.dataset?.kuField];
     if (action && event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
@@ -341,12 +405,15 @@ export function mountChatOverlay({ onTogglePresent, onLeak, onSlip, onDeath, onR
     card.append(node('div', 'ku-dir-card-head', '⚡ Событие сцены'));
     const row = node('div', 'ku-dir-row');
     row.append(chipButton('🎲 Что-нибудь случится', 'dir-cue', { kind: 'event' }, 'Рассказчик сам выберет: звонок, гость, погода, шум, новость'));
+    const genres = node('div', 'ku-dir-row ku-dir-genres');
+    genres.append(node('span', 'ku-dir-caption', 'Жанр:'));
+    for (const [id, genre] of Object.entries(EVENT_GENRES)) genres.append(chipButton(`${genre.icon} ${genre.label}`, 'dir-cue', { kind: 'event', genre: id }, `Пусть в сцене случится: ${genre.label.toLowerCase()}`));
     let ideas = [];
     try { ideas = eventIdeas?.() ?? []; } catch (error) { console.error('[Kulisy] Calendar ideas failed.', error); }
     for (const text of ideas) row.append(chipButton(`📅 ${text}`, 'dir-cue', { kind: 'event', text }, 'Из календаря на сегодня'));
     const field = node('div', 'ku-dir-row ku-dir-field');
     field.append(textField('event', ui.eventDraft, 'в дверь звонят…'), chipButton('⚡', 'dir-event-custom', {}, 'Пусть случится это (Enter)'));
-    card.append(row, field, waitRow());
+    card.append(row, genres, field, waitRow());
     return card;
   }
 
@@ -451,20 +518,15 @@ export function mountChatOverlay({ onTogglePresent, onLeak, onSlip, onDeath, onR
     const places = [
       ...(view.time ? [pill(view.time, 'Время сцены — открыть пульт')] : []),
       ...(view.location ? [pill(`📍 ${view.location}`, 'Место сцены — открыть пульт')] : []),
+      ...(view.weather?.badge ? [pill(view.weather.badge, 'Погода — открыть страницу «Погода»', 'weather')] : []),
+      ...(view.sceneMode && view.sceneMode !== 'calm' ? [pill(`${MODE_MARK[view.sceneMode] ?? ''} ${MODE_LABEL[view.sceneMode] ?? view.sceneMode}`, 'Тип сцены: от него зависит, какие разделы анкет уходят модели')] : []),
       ...(view.secrets ? [pill(`🔒 ${view.secrets}${view.waitingReveals ? ` · ждут ${view.waitingReveals}` : ''}`, 'Секреты — кто что знает', 'secrets')] : []),
     ];
     const cast = [...view.cast].sort((left, right) => Number(right.present) - Number(left.present));
     if (open) {
       headElement.removeAttribute('data-ku-action');
       headElement.title = '';
-      const tools = node('div', 'ku-dir-tools');
-      tools.append(
-        chipButton('🎬 Сцена', 'dir-pane', { pane: 'scene' }, 'Начать новую сцену: с чего, когда, где и с кем', `ku-dir-btn${ui.pane === 'scene' ? ' on' : ''}`),
-        chipButton('📝 Рассказчику', 'dir-pane', { pane: 'note' }, 'Указание на следующий ответ, без персонажа', `ku-dir-btn${ui.pane === 'note' ? ' on' : ''}`),
-        chipButton('⚡ Событие', 'dir-pane', { pane: 'event' }, 'Пусть в сцене что-то случится', `ku-dir-btn${ui.pane === 'event' ? ' on' : ''}`),
-        chipButton('▶ Пнуть сейчас', 'dir-kick', {}, director.canKick ? 'Отправить: с твоим текстом из поля, а если оно пустое — без поста' : 'Сейчас идёт генерация', 'ku-dir-btn ku-dir-kick'),
-      );
-      headElement.replaceChildren(arrow, ...places, tools);
+      headElement.replaceChildren(arrow, node('strong', 'ku-dir-title', 'Сцена'));
     } else {
       // Closed: one click anywhere on the bar opens it.
       headElement.dataset.kuAction = 'dir-toggle';
@@ -495,14 +557,148 @@ export function mountChatOverlay({ onTogglePresent, onLeak, onSlip, onDeath, onR
       for (const person of nearby) stage.append(personChip(person, director));
     }
     stage.append(chipButton('+ Позвать', 'dir-pane', { pane: 'others' }, 'Позвать того, кого сейчас нет', `ku-dir-btn ku-dir-add${ui.pane === 'others' ? ' on' : ''}`));
-    const parts = [stage];
+    const pane = ui.pane || 'who';
+    const mode = view.sceneMode || 'calm';
+    const kindInfo = view.weather ? WEATHER_KINDS[view.weather.kind] : null;
+    const tile = (icon, name, value, action, data, { on = false, kick = false, title = '' } = {}) => {
+      const button = chipButton('', action, data, title, `ku-tile${on ? ' on' : ''}${kick ? ' kick' : ''}`);
+      button.append(node('span', 'ku-tile-ico', icon), node('span', 'ku-tile-name', name), node('span', 'ku-tile-val', value));
+      if (action === 'dir-pane') button.setAttribute('aria-pressed', String(on));
+      return button;
+    };
+    // Time, place and secrets: one tile cut into thin strips (the first edits the clock, the others open their pages).
+    const strip = (icon, value, action, data, { on = false, title = '' } = {}) => {
+      const button = chipButton('', action, data, title, `ku-strip${on ? ' on' : ''}`);
+      button.append(node('span', 'ku-strip-ico', icon), node('span', 'ku-strip-val', value));
+      if (action === 'dir-pane') button.setAttribute('aria-pressed', String(on));
+      return button;
+    };
+    const stack = node('div', 'ku-tile-stack');
+    stack.append(
+      strip('🕑', view.time || 'время', 'dir-pane', { pane: 'time' }, { on: pane === 'time', title: 'Время сцены: поправить' }),
+      strip('📍', view.location || 'место', 'studio', { tab: 'places' }, { title: 'Место сцены: открыть локации' }),
+      ...(view.secrets ? [strip('🔒', `${view.secrets}${view.waitingReveals ? ` · ждут ${view.waitingReveals}` : ''}`, 'studio', { tab: 'secrets' }, { title: 'Секреты: кто что знает' })] : []),
+    );
+    const grid = node('div', 'ku-dir-grid');
+    grid.append(
+      tile('👥', 'Кто', here.length ? `${here.length} на сцене` : 'никого', 'dir-pane', { pane: 'who' }, { on: pane === 'who' || Boolean(ui.selected), title: 'Кто на сцене: позвать, убрать, пнуть' }),
+      stack,
+      tile(kindInfo ? kindInfo.icon : '🌤', 'Погода', kindInfo ? `${view.weather.temp != null ? `${view.weather.temp}° ` : ''}${kindInfo.label.toLowerCase()}` : 'не задана', 'dir-pane', { pane: 'weather' }, { on: pane === 'weather', title: 'Погода: выбрать, держать, заготовки' }),
+      tile(MODE_MARK[mode], 'Тип', MODE_LABEL[mode], 'dir-pane', { pane: 'mode' }, { on: pane === 'mode', title: 'Тип сцены: от него зависит, какие разделы анкет уходят модели' }),
+      ...(mode === 'intim' ? [tile('🎲', 'Кубик', view.dice?.picks?.length ? (view.dice.sent ? 'отправлен' : 'выбрано') : 'бросить', 'dir-pane', { pane: 'dice' }, { on: pane === 'dice', title: 'Кубик близости: чем будет эта сцена' })] : []),
+      tile('🎬', 'Сцена', 'новая', 'dir-pane', { pane: 'scene' }, { on: pane === 'scene', title: 'Начать новую сцену: с чего, когда, где и с кем' }),
+      tile('⚡', 'Событие', 'случится', 'dir-pane', { pane: 'event' }, { on: pane === 'event', title: 'Пусть в сцене что-то случится' }),
+      tile('📝', 'Рассказчику', 'указание', 'dir-pane', { pane: 'note' }, { on: pane === 'note', title: 'Указание на следующий ответ, без персонажа' }),
+      tile('▶', 'Пнуть', 'сейчас', 'dir-kick', {}, { kick: true, title: director.canKick ? 'Отправить: с твоим текстом из поля, а если оно пустое — без поста' : 'Сейчас идёт генерация' }),
+    );
+    const modeCard = () => {
+      const card = node('div', 'ku-dir-card ku-dir-mode');
+      card.append(node('span', 'ku-dir-caption', 'Тип сцены:'));
+      const row = node('div', 'ku-dir-row');
+      for (const [id, label] of Object.entries(MODE_LABEL)) {
+        const on = mode === id;
+        const button = chipButton(`${MODE_MARK[id]} ${label}`, 'dir-mode', { mode: id }, MODE_HINT[id], `ku-dir-btn${on ? ' on' : ''}`);
+        button.setAttribute('aria-pressed', String(on));
+        row.append(button);
+      }
+      card.append(row, node('span', 'ku-dir-caption', MODE_HINT[mode]));
+      return card;
+    };
+    const diceCard = () => {
+      const dice = view.dice ?? { groups: [], picks: [], locked: [], sent: false };
+      const card = node('div', 'ku-dir-card ku-dir-dice');
+      card.append(node('div', 'ku-dir-card-head', '🎲 Кубик близости'));
+      const top = node('div', 'ku-dir-row');
+      top.append(
+        chipButton(dice.picks.length ? '🎲 Перебросить' : '🎲 Бросить', 'dir-dice-roll', {}, 'Бросить заново всё, кроме закреплённого замком', 'ku-dir-btn ku-dir-kick'),
+        chipButton(dice.sent ? '✓ Отправлено' : '▶ Отправить', 'dir-dice-send', {}, 'Поставить выбранное направлением на следующий ответ', `ku-dir-btn${dice.sent ? ' on' : ''}`),
+        chipButton('Сбросить', 'dir-dice-clear', {}, 'Убрать выбранное и снять направление'),
+      );
+      card.append(top);
+      const burning = new Set(dice.picks.map(pick => `${pick.group}:${pick.id}`));
+      for (const group of dice.groups) {
+        const row = node('div', 'ku-dir-row ku-dir-dice-row');
+        const locked = dice.locked.includes(group.id);
+        row.append(node('span', 'ku-dir-caption ku-dice-label', `${group.icon} ${group.label}`));
+        const chips = node('span', 'ku-dice-chips');
+        for (const option of group.options) {
+          const on = burning.has(`${group.id}:${option.id}`);
+          const chip = chipButton(option.text, 'dir-dice-pick', { group: group.id, option: option.id }, group.multi ? 'Можно выбрать несколько' : 'Выбрать (ещё раз: снять)', `ku-dir-btn ku-dice-chip${on ? ' on' : ''}`);
+          chip.setAttribute('aria-pressed', String(on));
+          chips.append(chip);
+        }
+        chips.append(chipButton('+', 'dir-dice-add-open', { group: group.id }, 'Добавить свой вариант', `ku-dir-btn ku-dir-add${ui.diceAdd === group.id ? ' on' : ''}`));
+        row.append(chips,
+          chipButton(locked ? '🔒' : '🔓', 'dir-dice-lock', { group: group.id }, locked ? 'Закреплено: бросок это не меняет' : 'Закрепить: бросок это не меняет', `ku-dir-btn${locked ? ' on' : ''}`),
+          chipButton('↻', 'dir-dice-roll', { group: group.id }, 'Бросить заново только эту группу'));
+        card.append(row);
+        if (ui.diceAdd === group.id) {
+          const add = node('div', 'ku-dir-row ku-dir-field');
+          add.append(textField('dice-add', ui.diceDraft, 'свой вариант: например, «под дождём»'), chipButton('Добавить', 'dir-dice-add-save', {}, 'Добавить в группу и выбрать (Enter)'));
+          card.append(add);
+        }
+      }
+      card.append(node('span', 'ku-dir-caption', dice.sent ? 'Уйдёт с твоим следующим постом. Что поменяешь, уйдёт заново само.' : 'Выбери нажатием или брось: выбранное горит. «Отправить» ставит его направлением на следующий ответ.'));
+      return card;
+    };
+    const timeCard = () => {
+      const draft = clockDraft();
+      const card = node('div', 'ku-dir-card ku-dir-time');
+      card.append(node('div', 'ku-dir-card-head', '🕑 Время сцены'));
+      const fields = node('div', 'ku-dir-row ku-dir-field');
+      const field = (name, value, placeholder, label, width) => {
+        const input = textField(name, value, placeholder);
+        input.setAttribute('aria-label', label);
+        input.style.maxWidth = width;
+        return input;
+      };
+      fields.append(
+        field('clock-time', draft.time, '14:20', 'Время, часы и минуты', '6.5em'),
+        field('clock-day', draft.day, 'день', 'Номер дня истории', '5.5em'),
+        field('clock-label', draft.label, 'вторник, 8 апреля (если известно)', 'Дата или день недели', '100%'),
+        chipButton('Сохранить', 'dir-clock-save', {}, 'Записать время (Enter)', 'ku-dir-btn ku-dir-kick'),
+      );
+      const quick = node('div', 'ku-dir-row');
+      quick.append(node('span', 'ku-dir-caption', 'Сдвинуть:'));
+      for (const [label, minutes] of [['+15 мин', 15], ['+30 мин', 30], ['+1 ч', 60], ['+3 ч', 180], ['+8 ч', 480]]) quick.append(chipButton(label, 'dir-clock-shift', { minutes }, `Сдвинуть время вперёд: ${label}`));
+      card.append(fields, quick, node('span', 'ku-dir-caption', 'Время идёт вперёд само по ходу ответов. Здесь можно поправить его вручную.'));
+      return card;
+    };
+    const weatherCard = () => {
+      const card = node('div', 'ku-dir-card ku-dir-weather');
+      card.append(node('span', 'ku-dir-caption', 'Погода на улице:'));
+      const row = node('div', 'ku-dir-row');
+      for (const id of WEATHER_KIND_IDS) {
+        const on = view.weather?.kind === id;
+        const button = chipButton(`${WEATHER_KINDS[id].icon} ${WEATHER_KINDS[id].label}`, 'dir-weather', { kind: id }, WEATHER_KINDS[id].label, `ku-dir-btn${on ? ' on' : ''}`);
+        button.setAttribute('aria-pressed', String(on));
+        row.append(button);
+      }
+      const tools = node('div', 'ku-dir-row');
+      if (view.weather) {
+        const locked = view.weather.source === 'lock';
+        const lockButton = chipButton(locked ? '🔒 Держится' : '🔓 Держать', 'dir-weather-lock', {}, locked ? 'Погода держится: нажмите, чтобы отпустить' : 'Держать эту погоду: летописец и прогноз её не меняют', `ku-dir-btn${locked ? ' on' : ''}`);
+        lockButton.setAttribute('aria-pressed', String(locked));
+        tools.append(lockButton);
+      }
+      tools.append(chipButton('Заготовки ▸', 'studio', { tab: 'weather' }, 'Климат и сценарии: тайфун, дожди, жара…', 'ku-dir-btn'));
+      card.append(row, tools);
+      return card;
+    };
+    const parts = [grid];
     if (ui.selected) {
+      parts.push(stage);
       const menu = characterMenu(director);
       if (menu) parts.push(menu);
-    } else if (ui.pane === 'event') parts.push(eventMenu());
-    else if (ui.pane === 'scene') parts.push(sceneMenu(director));
-    else if (ui.pane === 'note') parts.push(noteMenu());
-    else if (ui.pane === 'others') parts.push(othersMenu(director));
+    } else if (pane === 'who') parts.push(stage);
+    else if (pane === 'others') parts.push(stage, othersMenu(director));
+    else if (pane === 'time') parts.push(timeCard());
+    else if (pane === 'dice') parts.push(diceCard());
+    else if (pane === 'weather') parts.push(weatherCard());
+    else if (pane === 'mode') parts.push(modeCard());
+    else if (pane === 'event') parts.push(eventMenu());
+    else if (pane === 'scene') parts.push(sceneMenu(director));
+    else if (pane === 'note') parts.push(noteMenu());
     if (director.cues?.length) {
       const queue = node('div', 'ku-dir-row ku-dir-queue');
       queue.append(node('span', 'ku-dir-caption', 'Режиссура:'));
@@ -556,6 +752,28 @@ export function mountChatOverlay({ onTogglePresent, onLeak, onSlip, onDeath, onR
         const anchor = block.querySelector('.mes_text');
         if (anchor?.nextSibling) block.insertBefore(note, anchor.nextSibling); else block.append(note);
       }
+    }
+  }
+
+  function renderSecretHints(view) {
+    for (const old of document.querySelectorAll(`#chat .${SECRET_HINT_CLASS}`)) old.remove();
+    for (const hint of view.secretHints ?? []) {
+      const block = document.querySelector(`#chat .mes[mesid="${hint.messageIndex}"] .mes_block`);
+      if (!block) continue;
+      const data = { messageIndex: hint.messageIndex, eventId: hint.eventId };
+      const note = node('div', `${LEAK_CLASS} ${SECRET_HINT_CLASS}`);
+      note.setAttribute('role', 'note');
+      const text = node('div', 'ku-leak-text');
+      text.append(node('i', 'fa-solid fa-user-secret'), node('b', null, ' Похоже на секрет: '), `«${hint.text}»`);
+      if (hint.names) text.append(node('span', 'ku-leak-quote', ` Знают: ${hint.names}.`));
+      const actions = node('div', 'ku-leak-actions');
+      actions.append(
+        actionButton('Открыть в окне', 'secret-open', data, 'Составить секрет: проверишь текст и знающих, потом сохранишь. Без твоего «Сохранить» ничего не записывается'),
+        actionButton('Это не секрет', 'secret-dismiss', data, 'Убрать отметку, ничего не записывая'),
+      );
+      note.append(text, actions);
+      const anchor = block.querySelector('.mes_text');
+      if (anchor?.nextSibling) block.insertBefore(note, anchor.nextSibling); else block.append(note);
     }
   }
 
@@ -635,6 +853,7 @@ export function mountChatOverlay({ onTogglePresent, onLeak, onSlip, onDeath, onR
         renderLeaks(view);
         renderDeaths(view);
         renderReveals(view);
+        renderSecretHints(view);
         renderSlips(view);
       } catch (error) {
         console.error('[Kulisy] Chat overlay render failed.', error);
@@ -648,6 +867,7 @@ export function mountChatOverlay({ onTogglePresent, onLeak, onSlip, onDeath, onR
       for (const old of document.querySelectorAll(`.${SLIP_CLASS}`)) old.remove();
       for (const old of document.querySelectorAll(`.${DEATH_CLASS}`)) old.remove();
       for (const old of document.querySelectorAll(`.${REVEAL_CLASS}`)) old.remove();
+      for (const old of document.querySelectorAll(`.${SECRET_HINT_CLASS}`)) old.remove();
     },
   };
 }

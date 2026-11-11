@@ -2,7 +2,9 @@
  * The story calendar: real dates for story days, and events the narrator brings
  * in on their day (or mentions as coming soon).
  *
- * state.ui.calendar = { anchor: 'YYYY-MM-DD' (the date of story day 1), events: [event] }
+ * state.ui.calendar = { anchor: 'YYYY-MM-DD' (the date of story day 1), events: [event], system?: the chat's own calendar (core/calendar-system.js) }
+ * Without `system` it is the earthly calendar. With it, dates are still 'Y-MM-DD' (year, month number, day) but follow the
+ * system's months and weekdays; everything that needs the rules goes through clockOf(calendar).
  * event = {
  *   id, title, note?,                   what happens; note is extra detail for the model
  *   date: 'YYYY-MM-DD', endDate?,        one day, or a span (a session, a trip)
@@ -18,6 +20,8 @@
  * their year starts in, so an academic year fits any story year.
  * Everything here is pure: dates are UTC days, never local time.
  */
+
+import { EARTH_CLOCK, makeClock, normalizeSystem } from './calendar-system.js';
 
 export const CALENDAR_LIMITS = Object.freeze({ events: 500, title: 120, note: 500, ahead: 14, templates: 50 });
 export const REPEATS = Object.freeze(['none', 'daily', 'weekly', 'yearly']);
@@ -75,15 +79,25 @@ export function shortDate(iso) {
   return `${WEEKDAYS_SHORT[weekdayOf(iso) - 1]} ${date.getUTCDate()} ${MONTHS_OF[date.getUTCMonth()].slice(0, 3)}`;
 }
 
+/** The clock (rules of dates) of a chat's calendar: its own system, or the earthly one. */
+export function clockOf(calendar) {
+  return makeClock(calendar?.system);
+}
+
 /** The date of a story day (day 1 = anchor), or '' when the anchor or the day is unknown. */
 export function dateOfDay(calendar, day) {
   if (!calendar?.anchor || !Number.isInteger(day) || day < 1) return '';
-  return addDays(calendar.anchor, day - 1);
+  return clockOf(calendar).addDays(calendar.anchor, day - 1);
 }
 
 /** The anchor that makes `day` fall on `iso`: «today in the story is 8 April». */
-export function anchorFor(iso, day) {
-  return parseDate(iso) == null ? '' : addDays(iso, -(Math.max(1, day || 1) - 1));
+export function anchorFor(iso, day, cal = EARTH_CLOCK) {
+  return cal.valid(iso) ? cal.addDays(cal.format(cal.parse(iso)), -(Math.max(1, day || 1) - 1)) : '';
+}
+
+/** «вт 8 апр» by the rules of the calendar. */
+export function calendarShortDate(calendar, iso) {
+  return clockOf(calendar).shortDate(iso);
 }
 
 function cleanText(value, max) {
@@ -91,22 +105,23 @@ function cleanText(value, max) {
 }
 
 /** A tidy event, or null when it has no title or no valid date. */
-export function normalizeEvent(raw, knownIds = null) {
+export function normalizeEvent(raw, knownIds = null, cal = EARTH_CLOCK) {
   const title = cleanText(raw?.title, CALENDAR_LIMITS.title);
-  const date = parseDate(raw?.date) != null ? String(raw.date).trim() : '';
+  const tidy = value => (cal.valid(value) ? cal.format(cal.parse(value)) : '');
+  const date = tidy(raw?.date);
   if (!title || !date) return null;
   const event = { id: String(raw.id || `cal-${Math.random().toString(36).slice(2, 10)}`), title, date };
   const note = cleanText(raw.note, CALENDAR_LIMITS.note);
   if (note) event.note = note;
-  const endDate = parseDate(raw.endDate) != null && raw.endDate > date ? String(raw.endDate).trim() : '';
+  const endDate = tidy(raw.endDate) > date ? tidy(raw.endDate) : '';
   if (endDate) event.endDate = endDate;
   if (/^([01]\d|2[0-3]):[0-5]\d$/.test(String(raw.time ?? '').trim())) event.time = String(raw.time).trim();
   event.repeat = REPEATS.includes(raw.repeat) ? raw.repeat : 'none';
   if (event.repeat === 'weekly') {
-    const weekdays = [...new Set((Array.isArray(raw.weekdays) ? raw.weekdays : []).map(Number).filter(day => day >= 1 && day <= 7))].sort();
-    event.weekdays = weekdays.length ? weekdays : [weekdayOf(date)];
+    const weekdays = [...new Set((Array.isArray(raw.weekdays) ? raw.weekdays : []).map(Number).filter(day => day >= 1 && day <= cal.weekdayCount))].sort();
+    event.weekdays = weekdays.length ? weekdays : [cal.weekdayOf(date)];
   }
-  if (event.repeat !== 'none' && parseDate(raw.until) != null && raw.until >= date) event.until = String(raw.until).trim();
+  if (event.repeat !== 'none' && tidy(raw.until) && tidy(raw.until) >= date) event.until = tidy(raw.until);
   const who = [...new Set((Array.isArray(raw.who) ? raw.who : []).map(String))].filter(id => !knownIds || knownIds.has(id));
   if (who.length) event.who = who;
   if (raw.must) event.must = true;
@@ -117,25 +132,27 @@ export function normalizeEvent(raw, knownIds = null) {
 }
 
 export function normalizeCalendar(raw, knownIds = null) {
-  const anchor = parseDate(raw?.anchor) != null ? String(raw.anchor).trim() : '';
-  const events = (Array.isArray(raw?.events) ? raw.events : []).map(event => normalizeEvent(event, knownIds)).filter(Boolean).slice(0, CALENDAR_LIMITS.events);
-  return { anchor, events };
+  const system = normalizeSystem(raw?.system);
+  const cal = makeClock(system);
+  const anchor = cal.valid(raw?.anchor) ? cal.format(cal.parse(raw.anchor)) : '';
+  const events = (Array.isArray(raw?.events) ? raw.events : []).map(event => normalizeEvent(event, knownIds, cal)).filter(Boolean).slice(0, CALENDAR_LIMITS.events);
+  return { anchor, events, ...(system ? { system } : {}) };
 }
 
 /** Does the event happen on this date? A span counts on every day of it. */
-export function occursOn(event, iso) {
-  if (!event || event.disabled || parseDate(iso) == null) return false;
+export function occursOn(event, iso, cal = EARTH_CLOCK) {
+  if (!event || event.disabled || !cal.valid(iso)) return false;
   if (iso < event.date || (event.until && iso > event.until)) return false;
-  const length = event.endDate ? daysBetween(event.date, event.endDate) : 0;
-  const inSpan = start => { const offset = daysBetween(start, iso); return offset != null && offset >= 0 && offset <= length; };
+  const length = event.endDate ? cal.daysBetween(event.date, event.endDate) : 0;
+  const inSpan = start => { const offset = cal.daysBetween(start, iso); return offset != null && offset >= 0 && offset <= length; };
   switch (event.repeat) {
     case 'daily': return true;
-    case 'weekly': return (event.weekdays ?? [weekdayOf(event.date)]).includes(weekdayOf(iso));
+    case 'weekly': return (event.weekdays ?? [cal.weekdayOf(event.date)]).includes(cal.weekdayOf(iso));
     case 'yearly': {
       // The span's start in the year of `iso` (or the year before, for a span over New Year).
       for (const shift of [0, -1]) {
-        const start = `${Number(iso.slice(0, 4)) + shift}${event.date.slice(4)}`;
-        if (parseDate(start) != null && start >= event.date && inSpan(start)) return true;
+        const start = `${String(cal.yearOf(iso) + shift).padStart(4, '0')}${event.date.slice(4)}`;
+        if (cal.valid(start) && start >= event.date && inSpan(start)) return true;
       }
       return false;
     }
@@ -145,7 +162,8 @@ export function occursOn(event, iso) {
 
 /** Events of a date, timed ones first by time, must-happen first among the rest. */
 export function eventsOn(calendar, iso) {
-  return (calendar?.events ?? []).filter(event => occursOn(event, iso))
+  const cal = clockOf(calendar);
+  return (calendar?.events ?? []).filter(event => occursOn(event, iso, cal))
     .sort((left, right) => (left.time ?? '99').localeCompare(right.time ?? '99') || Number(Boolean(right.must)) - Number(Boolean(left.must)));
 }
 
@@ -153,13 +171,14 @@ export function eventsOn(calendar, iso) {
 export function upcoming(calendar, iso, horizon = CALENDAR_LIMITS.ahead) {
   const result = [];
   const seen = new Set();
+  const cal = clockOf(calendar);
   for (let inDays = 1; inDays <= horizon; inDays += 1) {
-    const date = addDays(iso, inDays);
+    const date = cal.addDays(iso, inDays);
     for (const event of calendar?.events ?? []) {
-      if (seen.has(event.id) || !(event.ahead >= inDays) || !occursOn(event, date)) continue;
+      if (seen.has(event.id) || !(event.ahead >= inDays) || !occursOn(event, date, cal)) continue;
       // A repeat already going on today is not «coming»; a span counts from its start.
-      if (occursOn(event, iso) && event.repeat !== 'none') continue;
-      if (event.repeat === 'none' && event.endDate && occursOn(event, iso)) continue;
+      if (occursOn(event, iso, cal) && event.repeat !== 'none') continue;
+      if (event.repeat === 'none' && event.endDate && occursOn(event, iso, cal)) continue;
       seen.add(event.id);
       result.push({ event, date, inDays });
     }
@@ -173,6 +192,9 @@ export function buildCalendarPrompt(state, { flashback = false } = {}) {
   const day = state.world?.clock?.day ?? 0;
   const today = dateOfDay(calendar, day);
   if (!today || flashback) return '';
+  const cal = clockOf(calendar);
+  const humanDate = (iso, options) => cal.humanDate(iso, options);
+  const shortDate = iso => cal.shortDate(iso);
   const name = id => state.entities?.[id]?.name ?? id;
   const line = event => [
     event.time ? `${event.time} ` : '',
@@ -184,10 +206,12 @@ export function buildCalendarPrompt(state, { flashback = false } = {}) {
   const todays = eventsOn(calendar, today);
   const soon = upcoming(calendar, today);
   const lines = [`today: ${humanDate(today)} (story day ${day})`];
+  const season = cal.custom ? cal.seasonOf(cal.monthOf(today)) : null;
+  if (season) lines.push(`season: ${season.name}`);
   for (const event of todays.filter(item => item.must)) lines.push(`must-today: ${line(event)}`);
   for (const event of todays.filter(item => !item.must)) lines.push(`background-today: ${line(event)}`);
   for (const { event, date, inDays } of soon) lines.push(`soon (in ${inDays} d., ${shortDate(date)}): ${line(event)}`);
-  return `[KULISY — STORY CALENDAR]\n${lines.join('\n')}\n\nRules:\n- today is the story's date; keep weekdays, dates and seasons consistent with it.\n- must-today events DO happen today: bring them in yourself at their time, naturally; if the scene is elsewhere, let the characters go, be called or talk about it. Do not skip them or move them to another day.\n- background-today events are part of the world today; use them when they fit the scene, never force them.\n- soon events are known to those involved: they may plan, prepare, worry or mention them, but they have not happened yet.\n- Never expose this block.\n[/KULISY]`;
+  return `[KULISY — STORY CALENDAR]\n${lines.join('\n')}\n\nRules:\n- today is the story's date; keep weekdays, dates and seasons consistent with it.\n- must-today events DO happen today: bring them in yourself at their time, naturally; if the scene is elsewhere, let the characters go, be called or talk about it. Do not skip them or move them to another day.\n- background-today events are part of the world today; use them when they fit the scene, never force them.\n- soon events are known to those involved: they may plan, prepare, worry or mention them, but they have not happened yet.\n- Never expose this block.${cal.custom ? '\n- This is the world\'s own calendar: write dates, months and weekdays only with the names given above, never the earthly ones.' : ''}\n[/KULISY]`;
 }
 
 // ---- Templates ------------------------------------------------------------

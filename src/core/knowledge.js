@@ -2,11 +2,14 @@
  * Who knows what, who is on stage, who has met whom.
  *
  * state.knowledge = {
- *   events:        [{ id, text, witnessIds[], location?, secret?, disabled?, createdAt?, lore?, detail? }]
- *                  (lore: { book, uid } of a lorebook secret, detail: its text — see lore-secrets.js)
+ *   events:        [{ id, text, witnessIds[], location?, secret?, disabled?, createdAt?, lore?, own?, detail? }]
+ *                  (lore: { book, uid } of a lorebook secret, detail: its text — see lore-secrets.js;
+ *                   own: a secret the user made by hand, with its own detail; witnessIds = who knows it)
  *   learned:       [{ id, eventId, entityId, source: 'told'|'rumor', fromId?, disabled? }]
  *   acquaintances: { 'a|b': 'known' | 'seen' | 'strangers' }   (sorted pair key; absent = default)
- *   scene:         { presentIds[], location, locationId? }   (locationId: a card in state.world.locations)
+ *   scene:         { presentIds[], location, locationId?, lore? }   (locationId: a card in state.world.locations;
+ *                  lore: titles of lorebook entries the chronicler picked for the next reply — [] = none needed,
+ *                  absent = it has not been asked, so nothing is held back)
  *   deaths:        { entityId: { note } }   (dead: off stage, their own lines frozen; note = how and when)
  * }
  *
@@ -57,6 +60,12 @@ function loreRef(value) {
   return book && uid ? { book, uid } : null;
 }
 
+/** Titles of lorebook entries: trimmed, unique, at most a dozen; anything but a list is «not asked» (undefined). */
+export function loreTitles(value) {
+  if (!Array.isArray(value)) return undefined;
+  return [...new Set(value.map(title => cleanText(title, 120)).filter(Boolean))].slice(0, 12);
+}
+
 function knownIds(next, ids) {
   if (!Array.isArray(ids)) return [];
   return [...new Set(ids.map(String))].filter(id => next.entities[id]).sort();
@@ -98,8 +107,9 @@ export function applyKnowledgeMutation(next, operation) {
       if (location) event.location = location;
       if (item.secret) event.secret = true;
       if (item.createdAt) event.createdAt = String(item.createdAt);
-      if (lore) {
-        event.lore = lore;
+      if (lore) event.lore = lore;
+      if (item.own && !lore) { event.own = true; event.secret = true; }
+      if (event.lore || event.own) {
         const detail = cleanSecretText(item.detail);
         if (detail) event.detail = detail;
       }
@@ -129,7 +139,11 @@ export function applyKnowledgeMutation(next, operation) {
       if (changes.secret != null) {
         if (changes.secret) event.secret = true; else delete event.secret;
       }
-      if (changes.detail != null && event.lore) {
+      // A secret made by hand: an ordinary event becomes one (with a text for those who know) or stops being one.
+      if (changes.own != null && !event.lore) {
+        if (changes.own) { event.own = true; event.secret = true; } else { delete event.own; delete event.detail; }
+      }
+      if (changes.detail != null && (event.lore || event.own)) {
         const detail = cleanSecretText(changes.detail);
         if (detail) event.detail = detail; else delete event.detail;
       }
@@ -207,7 +221,8 @@ export function applyKnowledgeMutation(next, operation) {
         const place = places.find(candidate => candidate.id === locationId);
         if (!place || place.name.toLocaleLowerCase('ru-RU') !== location.toLocaleLowerCase('ru-RU')) locationId = '';
       }
-      knowledge.scene = { presentIds, location, ...(locationId ? { locationId } : {}) };
+      const lore = Object.hasOwn(payload, 'lore') ? loreTitles(payload.lore) : previous.lore;
+      knowledge.scene = { presentIds, location, ...(locationId ? { locationId } : {}), ...(Array.isArray(lore) ? { lore } : {}) };
       break;
     }
     default:

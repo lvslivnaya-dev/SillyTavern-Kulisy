@@ -123,3 +123,19 @@ test('automatic headcanons: only allowed pairs, resolved by scene names, follow 
   const gone = remapAutoHeadcanons(state, () => null);
   assert.equal(gone.headcanons[headcanonKey('a', 'p')], undefined, 'удалён вместе с сообщением');
 });
+
+test('a pinned headcanon is sent past the ranking and the limit, but only when its pair is in the scene', async () => {
+  const { addHeadcanons, headcanonKey, selectHeadcanons, createDefaultState, applyOperations, createOperation } = await import('../src/core/index.js');
+  let state = applyOperations(createDefaultState(), [
+    createOperation('entity.upsert', { id: 'a', name: 'Анна' }),
+    createOperation('entity.upsert', { id: 'b', name: 'Леон' }),
+  ]);
+  const key = headcanonKey('a', 'b');
+  state.ui = { ...state.ui, headcanons: addHeadcanons(state, key, ['Он провожает её до дома', 'Общий зонт']).headcanons };
+  state.ui.headcanons[key].items[0].pinned = true;
+  const none = () => 0;
+  assert.deepEqual(selectHeadcanons(state, { score: none, limit: 0 }), ['headcanon[Анна & Леон]: Он провожает её до дома']);
+  assert.deepEqual(selectHeadcanons(state, { score: none, pinnedFor: () => false }), []);
+  state.ui.headcanons[key].items[0].enabled = false;
+  assert.deepEqual(selectHeadcanons(state, { score: none }), [], 'выключенный не шлётся и закреплённым');
+});

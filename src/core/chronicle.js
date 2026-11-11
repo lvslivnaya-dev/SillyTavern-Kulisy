@@ -204,6 +204,57 @@ export function removeScene(chronicle, id) {
   return next;
 }
 
+/**
+ * Remove a summary of any level together with everything folded under it.
+ * Returns { chronicle, sceneIds }: the scenes that went with it, whose messages the caller gives back
+ * to the prompt. A chapter or arc left with one part unfolds into it, like removeScene.
+ */
+export function removeSummary(chronicle, id) {
+  let next = clone(chronicle);
+  const item = find(next, id);
+  if (!item) throw new RangeError('Такой сводки нет');
+  const doomed = new Set([id]);
+  for (const queue = [id]; queue.length;) {
+    const current = queue.pop();
+    for (const summary of next.summaries) {
+      if (summary.parentId === current && !doomed.has(summary.id)) { doomed.add(summary.id); queue.push(summary.id); }
+    }
+  }
+  const sceneIds = next.summaries.filter(summary => doomed.has(summary.id) && summary.level === 0 && !summary.childIds).map(summary => summary.id);
+  next.summaries = next.summaries.filter(summary => !doomed.has(summary.id));
+  let parentId = item.parentId;
+  while (parentId) {
+    const parent = find(next, parentId);
+    if (!parent) break;
+    parent.childIds = (parent.childIds ?? []).filter(childId => !doomed.has(childId) && find(next, childId));
+    const up = parent.parentId;
+    if (parent.childIds.length <= 1) next = unfoldSummary(next, parent.id);
+    parentId = up;
+  }
+  return { chronicle: next, sceneIds };
+}
+
+/**
+ * Whether a «summary» is really the API's refusal or an error message that was saved in its place
+ * («The prompt could not be submitted… sensitive words», «I'm sorry, but I can't…», «Извините, я не могу…»).
+ * A real summary is a few hundred characters of story, so only short texts are suspected.
+ */
+export function looksRefused(text) {
+  const value = String(text ?? '').trim();
+  if (!value || value.length > 600) return false;
+  // Words of an API/filter message can sit anywhere in it.
+  if (/could not be submitted|sensitive words|violates? (?:the |our |google'?s? )?(?:usage |content |safety )?(?:polic|terms|guideline)|content (?:polic|filter)|safety (?:filter|setting|system)|prompt[_ ]feedback|PROHIBITED_CONTENT|blocked (?:by|due)/i.test(value)) return true;
+  // A model's own refusal opens the answer; the same words deep inside a story are a quote.
+  const opening = value.slice(0, 110);
+  return /^[\s"'«»(\[*_>-]*(?:i(?:'m| am) sorry|sorry|i (?:cannot|can't|can not|won't|will not|am unable|'m unable)|as an ai|unfortunately)/i.test(opening)
+    || /^[\s"'«»(\[*_>-]*(?:извин|к сожалению|я не могу|не могу (?:помочь|выполнить|продолжить|написать)|мне жаль)/i.test(opening);
+}
+
+/** IDs of summaries (any level) whose text is a refusal; newest last. */
+export function refusedSummaries(chronicle) {
+  return (chronicle?.summaries ?? []).filter(item => looksRefused(item.text)).sort(bySeq).map(item => item.id);
+}
+
 export function editSummary(chronicle, id, text) {
   const value = cleanText(text);
   if (!value) throw new TypeError('Сводка не может быть пустой');

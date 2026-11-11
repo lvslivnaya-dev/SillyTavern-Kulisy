@@ -18,7 +18,7 @@ export {
   acquaintanceOf, deathOf, dossier, emptyKnowledge, howKnows, isDead, pairKey, presentIds, validateKnowledge, whoKnows,
 } from './knowledge.js';
 export {
-  DAY_PARTS, FEATURE_KINDS, ITEM_IMPORTANCE, WORLD_LIMITS, WORLD_OPERATION_TYPES,
+  DAY_PARTS, SCENE_MODES, FEATURE_KINDS, ITEM_IMPORTANCE, WORLD_LIMITS, WORLD_OPERATION_TYPES,
   activeConditions, currentLocation, dayPartOf, emptyWorld, featuresOf, formatTime, itemsOf, knowsItem, locationPath, outfitOf, parseTime, validateWorld,
 } from './world.js';
 export {
@@ -30,10 +30,10 @@ export {
 export {
   CHRONICLE_KEEP, CHRONICLE_LEVELS, CHRONICLE_MARKER, CHRONICLE_PRESETS, activeSummaries, addScene, buildChroniclePrompt, chronicleConfig,
   chronicleStats, editSummary, emptyChronicle, levelLabel, markStale, mergeCandidates, mergeSummaries, normalizeChronicle, pinSummary,
-  rebuildScene, removeScene, scenesOf, unfoldSummary,
+  looksRefused, rebuildScene, refusedSummaries, removeScene, removeSummary, scenesOf, unfoldSummary,
 } from './chronicle.js';
 export {
-  CALENDAR_LIMITS, MONTHS, REPEATS, addDays, anchorFor, buildCalendarPrompt, dateOfDay, eventsOn, formatDate, fromTemplate, humanDate,
+  CALENDAR_LIMITS, MONTHS, REPEATS, addDays, anchorFor, calendarShortDate, clockOf, buildCalendarPrompt, dateOfDay, eventsOn, formatDate, fromTemplate, humanDate,
   normalizeCalendar, normalizeEvent, normalizeTemplates, occursOn, parseDate, shortDate, toTemplate, upcoming, weekdayOf,
 } from './calendar.js';
 export { LORE_SECRET_LIMITS, cleanSecretText, isSecretEntry, loreSecretEvent, parseSecretMark, secretEntriesOf, stripSecretEntries } from './lore-secrets.js';
@@ -42,3 +42,13 @@ export {
   WARDROBE_CATEGORIES, WARDROBE_GENDERS, WARDROBE_LIMITS, WARDROBE_SHELVES, WARDROBE_VERSION, addCard, addLook, addToWorn, cardLabel, cardsOf, cleanImagePath,
   composeOutfit, outfitLabel, emptyWardrobe, normalizeWardrobe, removeCard, removeLook, searchCards, updateCard, updateLook, wornCards, wornLabel,
 } from './wardrobe.js';
+export {
+  NAMES_RULES, NAMES_TAG, NAME_CASES, NAME_LIMITS, addName, addNameFolder, buildNamesPrompt, changeNames, emptyNames, isSending, nameLine, normalizeNames, removeName, removeNameFolder, selectNames, splitWords,
+  updateName, updateNameFolder, wordsFor, wordsToFill,
+} from './name-library.js';
+export { DICE_GROUPS, DICE_LIMITS, describeGroups, diceCue, normalizeDice, optionsOf, recordDice, rollDice, togglePick, updateDice, viewGroups } from './intimacy-dice.js';
+export {
+  BUILTIN_CLIMATES, BUILTIN_SCENARIOS, MONTH_NAMES, WEATHER_KINDS, WEATHER_KIND_IDS, WEATHER_LIMITS,
+  addScenario, cleanWeather, findClimate, forecastDay, normalizeClimate, normalizeClimates, normalizePlan, removeScenario, scenarioFrom, weatherBadge, weatherFor, weatherLine, weekForecast,
+} from './weather.js';
+export { EARTH_CLOCK, READY_SYSTEMS, SYSTEM_LIMITS, makeClock, normalizeSystem, normalizeSystems, systemClimate, yearLength } from './calendar-system.js';

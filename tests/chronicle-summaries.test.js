@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   CHRONICLE_KEEP, CHRONICLE_MARKER, activeSummaries, addScene, buildChroniclePrompt, chronicleConfig, chronicleStats, editSummary,
-  emptyChronicle, mergeCandidates, mergeSummaries, normalizeChronicle, pinSummary, removeScene, scenesOf, unfoldSummary,
+  emptyChronicle, looksRefused, mergeCandidates, mergeSummaries, normalizeChronicle, pinSummary, removeScene, removeSummary, scenesOf, unfoldSummary,
 } from '../src/core/index.js';
-import { hideSummarized, parseSummaryText, pendingChunk, pendingCount, runChronicle, staleSceneOf } from '../src/integration/chronicle-run.js';
+import { RefusedError, hideSummarized, parseSummaryText, pendingChunk, pendingCount, runChronicle, staleSceneOf } from '../src/integration/chronicle-run.js';
 import { createChronicleRunner } from '../src/integration/chronicle-actions.js';
 
 function scenes(count) {
@@ -154,4 +154,76 @@ test('runner callbacks: a slider switches to custom, unfolding a scene gives mes
   assert.equal(await runner.callbacks.onChronicleUnfold({ id: 's1' }), true);
   assert.equal(messages[0].extra[CHRONICLE_MARKER], CHRONICLE_KEEP);
   assert.deepEqual(chronicle.summaries, []);
+});
+
+const REFUSAL = 'The prompt could not be submitted. The prompt contains sensitive words that violate Google Gemini Terms of Use.';
+
+test('a refusal or an API error is never saved as a summary', async () => {
+  assert.equal(looksRefused(REFUSAL), true);
+  assert.equal(looksRefused("I'm sorry, but I can't help with that."), true);
+  assert.equal(looksRefused('Извините, я не могу продолжить этот текст.'), true);
+  assert.equal(looksRefused('В спальне Майки Сано кормил Иоко клубникой, пока она не уснула.'), false);
+  assert.equal(looksRefused('Сано отказался помогать Иоко: «I cannot help you» — произнёс он, и дверь захлопнулась.'), false, 'цитата внутри пересказа — не отказ');
+  assert.equal(looksRefused('x'.repeat(700) + ' could not be submitted'), false, 'настоящая сводка длинная');
+  assert.equal(parseSummaryText(REFUSAL), null);
+
+  const messages = chat(40);
+  let chronicle = emptyChronicle();
+  const api = {
+    context: { async generateRaw() { return REFUSAL; } }, chat: () => messages, chronicle: () => chronicle, persona: '',
+    save: async next => { chronicle = next; }, saveChat: async () => {}, isStale: () => false,
+  };
+  await assert.rejects(runChronicle(api, chronicleConfig({ preset: 'custom', sceneEvery: 10 })), error => error instanceof RefusedError && /отказалась/.test(error.message) && /Вспомогательный API/.test(error.message));
+  assert.deepEqual(chronicle.summaries, [], 'ничего не записано');
+  assert.equal(messages[0].extra[CHRONICLE_MARKER], undefined, 'сообщения не помечены сжатыми');
+});
+
+test('removing a summary: a scene, a chapter with its scenes, and what is left behind', () => {
+  let chronicle = mergeSummaries(scenes(5), ['s1', 's2', 's3'], { id: 'c1', text: 'Глава' });
+  const scene = removeSummary(chronicle, 's4');
+  assert.deepEqual(scene.sceneIds, ['s4']);
+  assert.deepEqual(activeSummaries(scene.chronicle).map(item => item.id), ['c1', 's5']);
+  const chapter = removeSummary(chronicle, 'c1');
+  assert.deepEqual(chapter.sceneIds.sort(), ['s1', 's2', 's3']);
+  assert.deepEqual(activeSummaries(chapter.chronicle).map(item => item.id), ['s4', 's5'], 'части главы удалены вместе с ней');
+  // A scene inside a chapter: the chapter left with two parts stays; with one part it unfolds.
+  const inner = removeSummary(chronicle, 's1');
+  assert.deepEqual(scenesOf(inner.chronicle, 'c1'), ['s2', 's3']);
+  const small = removeSummary(mergeSummaries(scenes(2), ['s1', 's2'], { id: 'c1', text: 'Глава' }), 's2');
+  assert.deepEqual(activeSummaries(small.chronicle).map(item => item.id), ['s1']);
+  assert.throws(() => removeSummary(chronicle, 'nope'), /нет/);
+});
+
+test('callbacks: delete gives the messages back for good, delete-all-refusals only touches refusals', async () => {
+  const messages = chat(6);
+  messages[0].extra[CHRONICLE_MARKER] = 's1';
+  messages[1].extra[CHRONICLE_MARKER] = 's2';
+  messages[2].extra[CHRONICLE_MARKER] = 's3';
+  let chronicle = ['Сцена один: Судзу пришла к Тосве.', REFUSAL, 'Сцена три: драка у моста закончилась.'].reduce((acc, text, index) => addScene(acc, { id: `s${index + 1}`, text, messageCount: 1 }), emptyChronicle());
+  const asked = [];
+  const runner = createChronicleRunner({
+    settings: () => ({ chronicle: { enabled: true } }), saveSettings() {}, chronicle: () => chronicle, save: async next => { chronicle = next; },
+    chat: () => messages, saveChat: async () => {}, context: () => fakeModel().context, persona: () => '',
+    isGenerating: () => false, waitForGeneration: async () => {}, chatKey: () => 'chat', confirm: async (title, text) => { asked.push(text); return true; },
+    refresh() {}, log() {},
+  });
+  assert.deepEqual(runner.callbacks.onChronicleGet().refused, ['s2']);
+  assert.equal(await runner.callbacks.onChronicleRemoveRefused(), 1);
+  assert.deepEqual(chronicle.summaries.map(item => item.id), ['s1', 's3']);
+  assert.equal(messages[1].extra[CHRONICLE_MARKER], CHRONICLE_KEEP);
+  assert.equal(messages[0].extra[CHRONICLE_MARKER], 's1', 'настоящая сводка не тронута');
+  assert.equal(await runner.callbacks.onChronicleRemoveRefused(), 0, 'отказов больше нет');
+  assert.equal(await runner.callbacks.onChronicleRemove({ id: 's3' }), true);
+  assert.match(asked.at(-1), /1 сообщений снова пойдут модели/);
+  assert.deepEqual(chronicle.summaries.map(item => item.id), ['s1']);
+  assert.equal(messages[2].extra[CHRONICLE_MARKER], CHRONICLE_KEEP);
+  assert.equal(await runner.callbacks.onChronicleRemove({ id: 'nope' }), false);
+  // A declined confirmation changes nothing.
+  const strict = createChronicleRunner({
+    settings: () => ({ chronicle: {} }), saveSettings() {}, chronicle: () => chronicle, save: async next => { chronicle = next; },
+    chat: () => messages, saveChat: async () => {}, context: () => fakeModel().context, persona: () => '',
+    isGenerating: () => false, waitForGeneration: async () => {}, chatKey: () => 'chat', confirm: async () => false, refresh() {}, log() {},
+  });
+  assert.equal(await strict.callbacks.onChronicleRemove({ id: 's1' }), false);
+  assert.deepEqual(chronicle.summaries.map(item => item.id), ['s1']);
 });

@@ -26,6 +26,13 @@ import {
   buildKnowledgePrompt,
   cleanSecretText,
   anchorFor,
+  calendarShortDate,
+  clockOf,
+  READY_SYSTEMS,
+  makeClock,
+  normalizeSystem,
+  normalizeSystems,
+  systemClimate,
   shortDate,
   buildCalendarPrompt,
   dateOfDay,
@@ -33,6 +40,36 @@ import {
   normalizeCalendar,
   normalizeEvent,
   normalizeTemplates,
+  BUILTIN_CLIMATES,
+  BUILTIN_SCENARIOS,
+  addScenario,
+  findClimate,
+  normalizeClimate,
+  normalizeClimates,
+  normalizePlan,
+  removeScenario,
+  scenarioFrom,
+  weatherBadge,
+  weatherFor,
+  weekForecast,
+  describeGroups,
+  diceCue,
+  normalizeDice,
+  recordDice,
+  rollDice,
+  updateDice,
+  togglePick,
+  viewGroups,
+  addName,
+  addNameFolder,
+  changeNames,
+  removeNameFolder,
+  updateNameFolder,
+  buildNamesPrompt,
+  normalizeNames,
+  removeName,
+  updateName,
+  wordsToFill,
   toTemplate,
   loreSecretEvent,
   secretEntriesOf,
@@ -55,7 +92,9 @@ import {
 import { analyzeHistoryBatch, analyzeKnowledge, analyzeMessage, discoverHistoryCharacters } from './src/integration/analyzer.js';
 import { selectKnowledgeCandidates } from './src/integration/knowledge-analysis.js';
 import { detectConflicts } from './src/integration/conflicts.js';
-import { clearRelationshipPrompt, updateCalendarPrompt, updateDirectionPrompt, updateChroniclePrompt, updateKnowledgePrompt, updateRelationshipPrompt, updateScenePrompt } from './src/integration/prompt.js';
+import { clearRelationshipPrompt, updateCalendarPrompt, updateDirectionPrompt, updateChroniclePrompt, updateKnowledgePrompt, updateNamesPrompt, updateRelationshipPrompt, updateScenePrompt } from './src/integration/prompt.js';
+import { fillNameForms } from './src/integration/name-forms.js';
+import { generateClimate } from './src/integration/weather-generation.js';
 import { generateCalendarTemplate } from './src/integration/calendar-generation.js';
 import { buildScenePrompt, looksFit, newlyDropped } from './src/integration/world-prompt.js';
 import { createReminders, createWorldCallbacks } from './src/integration/world-actions.js';
@@ -93,6 +132,12 @@ import { scanAcquaintances } from './src/integration/acquaintance-scan.js';
 import { scanLoreSecrets } from './src/integration/secret-scan.js';
 import { guessGenders } from './src/integration/genders.js';
 import { mentionScorer, mentionedEntities, recentSceneText, semanticScorer } from './src/integration/headcanon-retrieval.js';
+import { applyGate, normalizeGate, planGate, worldEntries } from './src/integration/lore-gate.js';
+import { autoSecrets, bornAt, duplicateBuckets } from './src/core/secret-tools.js';
+import { describeBlocks } from './src/integration/prompt-overview.js';
+import { classifyAutoSecrets, composeSecret, foldEvents } from './src/integration/secret-compose.js';
+import { openSecretDialog } from './src/integration/secret-dialog.js';
+import { mountSelectionChip } from './src/integration/selection-chip.js';
 import { DEFAULT_LOCAL_MODEL, LOCAL_MODELS, cosine, embedTexts } from './src/integration/embeddings.js';
 import { createChatStorage } from './src/integration/storage.js';
 import { createLibraryCallbacks, createLocationLibraryStore, syncChat } from './src/integration/location-library-actions.js';
@@ -210,7 +255,7 @@ export async function init() {
       personaPrivate: personaPrivateText(),
       personaMismatch: Boolean(persona && chatPersona && boundPersonaName
         && boundPersonaName.toLocaleLowerCase('ru-RU') !== chatPersona.toLocaleLowerCase('ru-RU')),
-      lorebooks: { available: SillyTavern.getContext().getWorldInfoNames?.() ?? [], selected: state.ui?.linkedLorebooks ?? [], cardWorlds: cardWorldNames(), status: 'Книги подключаются только к анализатору этого чата. Исходные файлы не изменяются.' },
+      lorebooks: { available: SillyTavern.getContext().getWorldInfoNames?.() ?? [], selected: state.ui?.linkedLorebooks ?? [], cardWorlds: cardWorldNames(), tavern: tavernBooks, status: 'Этот список — книги, которые читают сами Кулисы (анализ, поиск персонажей, секреты). Модели записи отправляет таверна, и только из книг, подключённых в ней самой: к карточке, персоне, чату или глобально. Исходные файлы не изменяются.' },
       settings: {
         autoTrack: settings.autoAnalyze, widgetEnabled: settings.widget.visible,
         maxPromptCharacters: settings.maxPromptCharacters,
@@ -228,12 +273,14 @@ export async function init() {
         chronicle: structuredClone(settings.chronicle ?? {}),
         aux: structuredClone(settings.aux),
         embeddings: structuredClone(settings.embeddings),
+        loreGate: normalizeGate(settings.loreGate),
         ...Object.fromEntries(TOGGLE_SETTINGS.map(key => [key, settings[key] !== false])),
       },
       widget: {
         expanded: settings.widget.expanded,
         position: { x: settings.widget.x, y: settings.widget.y },
       },
+      loreGateReport: gateReport,
       promptPreview: buildInjectionText(state, persona) || 'Пока пусто: нет связей с ненулевыми показателями.',
       promptTokens,
       knowledgePreview: buildKnowledgeText(state) || '',
@@ -242,9 +289,34 @@ export async function init() {
       factorHits: factorHits(),
       calendar: calendarOf(state),
       calendarToday: dateOfDay(calendarOf(state), state.world?.clock?.day ?? 0),
+      calendarSystems: calendarLibrary(),
       calendarTemplates: normalizeTemplates(settings.calendarTemplates),
+      names: normalizeNames(settings.nameLibrary),
+      dice: { avoidRepeat: normalizeDice(settings.intimacyDice).avoidRepeat, auto: normalizeDice(settings.intimacyDice).auto, groups: describeGroups(settings.intimacyDice), historyCount: normalizeDice(settings.intimacyDice).history.length },
+      weather: currentWeather(state),
+      weatherSet: state.world?.weather ?? null,
+      weatherPlan: normalizePlan(state.ui?.weatherPlan),
+      weatherClimates: [...BUILTIN_CLIMATES, ...normalizeClimates(settings.weatherClimates)],
+      weatherScenarios: BUILTIN_SCENARIOS,
+      weatherWeek: weekForecast(state, { plan: state.ui?.weatherPlan, climates: settings.weatherClimates, dateOfDay: day => dateOfDay(calendarOf(state), day), ...weatherCalendar(state) }),
+      weatherDated: Boolean(dateOfDay(calendarOf(state), state.world?.clock?.day ?? 0)),
+      namesChatOff: Boolean(state.ui?.namesOff),
+      namesTokens,
       calendarTokens,
       reveals: openReveals(),
+      promptBlocks: describeBlocks({
+        parts: promptParts,
+        tokens: { chronicle: chronicleTokens, scene: sceneTokens, calendar: calendarTokens, knowledge: knowledgeTokens, names: namesTokens, relationships: promptTokens, direction: directionTokens },
+        enabled: settings.enabled ? {
+          chronicle: chronicleConfig(settings.chronicle).enabled ? true : 'Хроника выключена: сводки не пишутся и не уходят модели.',
+          scene: settings.sendScene !== false && settings.trackWorld !== false ? true : 'Выключено: «Сцена в промпт» или слежение за миром.',
+          calendar: settings.sendCalendar !== false ? true : 'Выключено: «Календарь в промпт».',
+          knowledge: settings.sendKnowledge !== false ? true : 'Выключено: «Знания в промпт».',
+          names: state.ui?.namesOff ? 'Выключено в этом чате (Мир → Имена).' : normalizeNames(settings.nameLibrary).enabled ? true : 'Выключено: переключатель «Отправлять имена» (Мир → Имена).',
+          relationships: settings.injectPrompt ? true : 'Выключено: отправка отношений.',
+        } : Object.fromEntries(['chronicle', 'scene', 'calendar', 'knowledge', 'names', 'relationships', 'direction'].map(id => [id, 'Кулисы выключены.'])),
+      }),
+      tidy: { autoSecrets: autoSecrets(state).length, foldable: duplicateBuckets(state).reduce((sum, bucket) => sum + bucket.events.length, 0) },
       dossiers: Object.fromEntries(Object.keys(state.entities).map(id => [id, dossier(state, id)])),
       knowledgeTokens,
       chronicleTokens,
@@ -317,6 +389,7 @@ export async function init() {
   }
 
   async function commit(next, immediate = true) {
+    const before = state;
     state = importState(next);
     try {
       await storage.save(state);
@@ -326,11 +399,13 @@ export async function init() {
     }
     refreshPrompt();
     notify();
+    autoDice(before, state).catch(error => console.error('[Kulisy] Auto dice failed.', error));
     return state;
   }
 
   let promptTokens = 0;
   let knowledgeTokens = 0;
+  let namesTokens = 0;
   let chronicleTokens = 0;
   let sceneTokens = 0;
   let calendarTokens = 0;
@@ -395,6 +470,29 @@ export async function init() {
   // Headcanons picked for the current scene; refreshed before every generation
   // (generate interceptor) and when the chat or the headcanons change.
   let sceneHeadcanons = [];
+  // «Суфлёр лорбуков»: when each character's «entrance» sections last went out, and the last decision for the settings page.
+  const gateTracker = new Map();
+  let gateReport = null;
+  // Titles of the lorebook notes (places, rules, items…) of the last prompt: what the chronicler may pick from.
+  let gateCatalog = [];
+  const gateLoreList = () => {
+    const gate = normalizeGate(settings.loreGate);
+    return settings.enabled && gate.enabled && gate.world === 'chronicler' ? gateCatalog : [];
+  };
+  // Books SillyTavern itself loaded for the last prompt of this chat (null until it builds one).
+  // A book linked to Kulisy only is read by the analyzer, but the model never gets it.
+  let tavernBooks = null;
+  // The blocks as they were last handed to SillyTavern, for «Что получает модель».
+  const promptParts = { chronicle: '', scene: '', calendar: '', knowledge: '', names: '', relationships: '', direction: '' };
+  let directionTokens = 0;
+  /** The user's fresh post and the reply before it, apart: a name in the post weighs more than one in the reply. A reply being swiped is not counted. */
+  function gateTexts(chat) {
+    const messages = (chat ?? []).filter(message => message && !message.is_system);
+    const last = messages.findLastIndex(message => message.is_user);
+    if (last < 0) return { namedText: '', replyText: String(messages.at(-1)?.mes ?? '') };
+    const before = messages.slice(0, last).findLast(message => !message.is_user);
+    return { namedText: String(messages[last].mes ?? ''), replyText: String(before?.mes ?? '') };
+  }
   // Why the preview shows what it shows: how many are on, how many fit the scene, how they were picked.
   let headcanonInfo = { enabled: 0, picked: 0, method: 'mentions', disabled: false };
 
@@ -408,10 +506,13 @@ export async function init() {
       }
       const sceneText = recentSceneText(chat);
       const { score, method, note } = await headcanonScorer(sceneText);
+      // A pinned headcanon goes out whenever everyone of its pair is on stage or named in the last posts.
+      const inScene = new Set([...presentIds(state), ...mentionedEntities(state, sceneText)]);
       sceneHeadcanons = selectHeadcanons(state, {
         score,
         limit: Math.max(1, Math.min(30, Number(settings.headcanonLimit) || 8)),
         maxCharacters: 1500,
+        pinnedFor: pair => pair.ids.every(id => inScene.has(id)),
       });
       headcanonInfo = { enabled, picked: sceneHeadcanons.length, method, disabled: false, ...(note ? { note } : {}) };
     } catch (error) {
@@ -490,6 +591,7 @@ export async function init() {
       wardrobe: wardrobeStore.get(),
       skipItemIds: shadeItems(targetState),
       reminders: reminders.list(),
+      weather: settings.sendWeather === false ? null : currentWeather(targetState),
       maxCharacters: Math.max(300, Math.min(6000, Number(settings.scenePromptCharacters) || 1500)),
       looksLimits: { card: settings.looksCardCharacters, character: settings.looksCharacterCharacters },
     };
@@ -536,24 +638,44 @@ export async function init() {
     const chronicleBlock = settings.enabled && chronicleSettings.enabled
       ? buildChroniclePrompt(chronicleState(), { maxCharacters: chronicleSettings.maxPromptCharacters }) : '';
     chronicleTokens = chronicleBlock ? countTokens(chronicleBlock) : 0;
+    promptParts.chronicle = chronicleBlock;
     updateChroniclePrompt(ctx, chronicleBlock);
     const sceneBlock = buildSceneText(state);
     sceneTokens = sceneBlock ? countTokens(sceneBlock) : 0;
+    promptParts.scene = sceneBlock;
     updateScenePrompt(ctx, sceneBlock);
     const calendarBlock = settings.enabled && settings.sendCalendar !== false
       ? buildCalendarPrompt(state, { flashback: Boolean(state.world?.clock?.flashback) }) : '';
     calendarTokens = calendarBlock ? countTokens(calendarBlock) : 0;
+    promptParts.calendar = calendarBlock;
     updateCalendarPrompt(ctx, calendarBlock);
     // Stage directions («пнуть»): only the cues in force for this reply.
+    promptParts.direction = '';
     try {
-      updateDirectionPrompt(ctx, settings.enabled ? buildDirectionPrompt(state, directionState(), { presentIds: presentIds(state) }) : '');
+      promptParts.direction = settings.enabled ? buildDirectionPrompt(state, directionState(), { presentIds: presentIds(state) }) : '';
+      updateDirectionPrompt(ctx, promptParts.direction);
     } catch (error) { console.error('[Kulisy] Direction prompt failed.', error); }
+    directionTokens = promptParts.direction ? countTokens(promptParts.direction) : 0;
     // Knowledge has its own switch, so it is sent even with the relationship block off.
     const knowledge = buildKnowledgeText(state);
     knowledgeTokens = knowledge ? countTokens(knowledge) : 0;
+    promptParts.knowledge = knowledge;
     updateKnowledgePrompt(ctx, knowledge);
+    // Spelling and case forms of the names on stage and of those said in the last posts.
+    let namesBlock = '';
+    try {
+      if (settings.enabled && !state.ui?.namesOff) {
+        const { namedText, replyText } = gateTexts(ctx.chat);
+        namesBlock = buildNamesPrompt(settings.nameLibrary, state, { presentIds: presentIds(state), text: `${namedText}
+${replyText}` });
+      }
+    } catch (error) { console.error('[Kulisy] Names prompt failed.', error); }
+    namesTokens = namesBlock ? countTokens(namesBlock) : 0;
+    promptParts.names = namesBlock;
+    updateNamesPrompt(ctx, namesBlock);
     if (!settings.enabled || !settings.injectPrompt) {
       promptTokens = 0;
+      promptParts.relationships = '';
       updateRelationshipPrompt(ctx, '', false);
       notify();
       return;
@@ -561,6 +683,7 @@ export async function init() {
     const persona = state.ui?.personaId && state.entities[state.ui.personaId] ? state.ui.personaId : '';
     const text = buildInjectionText(state, persona);
     promptTokens = text ? countTokens(`[RELATIONSHIP ENGINE]\n${text}\n[/RELATIONSHIP ENGINE]`) : 0;
+    promptParts.relationships = text;
     updateRelationshipPrompt(ctx, text, Boolean(text));
     notify();
   }
@@ -709,6 +832,12 @@ export async function init() {
       if (Number.isFinite(value)) settings.director.silenceAfter = Math.max(0, Math.min(50, value));
     }
     if (Object.hasOwn(patch, 'imageStorage')) settings.imageStorage = patch.imageStorage === 'folder' ? 'folder' : 'server';
+    if (patch.loreGate && typeof patch.loreGate === 'object') {
+      settings.loreGate = normalizeGate({
+        ...settings.loreGate, ...patch.loreGate,
+        sections: { ...settings.loreGate?.sections, ...Object.fromEntries(Object.entries(patch.loreGate.sections ?? {}).map(([id, rule]) => [id, { ...settings.loreGate?.sections?.[id], ...rule }])) },
+      });
+    }
     if (patch.aux && typeof patch.aux === 'object') settings.aux = normalizeAux({ ...settings.aux, ...patch.aux });
     if (patch.wardrobeVision && typeof patch.wardrobeVision === 'object') settings.wardrobeVision = visionSettings({ ...settings.wardrobeVision, ...patch.wardrobeVision });
     if (patch.embeddings && typeof patch.embeddings === 'object') {
@@ -736,6 +865,24 @@ export async function init() {
     return normalizeCalendar(source.ui?.calendar, new Set(Object.keys(source.entities ?? {})));
   }
 
+  /** With a calendar of its own the climate comes from its seasons (and its months), not from the earthly climates. */
+  function weatherCalendar(source = state) {
+    const calendar = calendarOf(source);
+    const cal = clockOf(calendar);
+    return cal.custom ? { climate: systemClimate(calendar.system) ?? false, monthOf: iso => cal.monthOf(iso) } : {};
+  }
+
+  /** The weather in force now (set today, a scenario, or the forecast); null when nothing is known. */
+  function currentWeather(source = state) {
+    try {
+      const day = source.world?.clock?.day ?? 0;
+      return weatherFor(source, { plan: source.ui?.weatherPlan, climates: settings.weatherClimates, date: dateOfDay(calendarOf(source), day), day, ...weatherCalendar(source) });
+    } catch (error) {
+      console.error('[Kulisy] Weather failed.', error);
+      return null;
+    }
+  }
+
   async function commitCalendar(change, base = state) {
     const next = structuredClone(base);
     next.ui ??= {};
@@ -745,7 +892,40 @@ export async function init() {
     refreshPrompt();
   }
 
+  /** The calendars to choose from: the ready ones and the user's own (the chat's copy is told by `calendar.system`). */
+  function calendarLibrary() {
+    return [...READY_SYSTEMS.map(system => ({ ...system, ready: true })), ...normalizeSystems(settings.calendarSystems)];
+  }
+
   const calendarCallbacks = {
+    /**
+     * Put a calendar into this chat (`system`: a whole calendar; null: back to the earthly one). Its dates differ from the old
+     * ones, so the date of the story and the events are cleared: the page asks first.
+     */
+    onCalendarSetSystem: ({ system }) => {
+      const clean = system ? normalizeSystem(system) : null;
+      if (system && !clean) throw new Error('Календарь неполный: нужны название, не меньше двух дней недели и хотя бы один месяц.');
+      return commitCalendar(calendar => {
+        if (clean) calendar.system = clean; else delete calendar.system;
+        calendar.anchor = '';
+        calendar.events = [];
+      });
+    },
+    /** Keep a calendar in the library (a new one or an edited one with the same id). → its id. */
+    onCalendarSaveSystem: ({ system }) => {
+      const clean = normalizeSystem(system);
+      if (!clean) throw new Error('Календарь неполный: нужны название, не меньше двух дней недели и хотя бы один месяц.');
+      if (READY_SYSTEMS.some(item => item.id === clean.id)) throw new Error('Готовый календарь не перезаписать: сохраните копию под другим названием.');
+      settings.calendarSystems = [...normalizeSystems(settings.calendarSystems).filter(item => item.id !== clean.id), clean];
+      context.saveSettingsDebounced();
+      notify();
+      return clean.id;
+    },
+    onCalendarRemoveSystem: ({ id }) => {
+      settings.calendarSystems = normalizeSystems(settings.calendarSystems).filter(item => item.id !== id);
+      context.saveSettingsDebounced();
+      notify();
+    },
     /** «Сегодня в истории — 8 апреля»: the date of the current story day; the rest follows. */
     onCalendarSetToday: ({ date }) => {
       // An unknown story day becomes day 1: the date has to belong to some day.
@@ -754,13 +934,13 @@ export async function init() {
         transactionId: uniqueId('manual'), reason: 'День 1: дата истории задана в календаре', timestamp: new Date().toISOString(),
       }));
       return commitCalendar(calendar => {
-        const anchor = anchorFor(date, day || 1);
+        const anchor = anchorFor(date, day || 1, clockOf(calendar));
         if (!anchor) throw new Error('Не понял дату.');
         calendar.anchor = anchor;
       }, base);
     },
     onCalendarSaveEvent: ({ event }) => commitCalendar(calendar => {
-      const clean = normalizeEvent(event, new Set(Object.keys(state.entities)));
+      const clean = normalizeEvent(event, new Set(Object.keys(state.entities)), clockOf(calendar));
       if (!clean) throw new Error('У события нужны название и дата.');
       const index = calendar.events.findIndex(item => item.id === clean.id);
       if (index >= 0) calendar.events[index] = clean; else calendar.events.push(clean);
@@ -779,6 +959,7 @@ export async function init() {
     },
     /** Put a template (saved or just generated) into this chat's calendar, in a year. indexes: only those events. */
     onCalendarApplyTemplate: ({ template, templateId, year, indexes }) => {
+      if (clockOf(calendarOf()).custom) throw new Error('Шаблоны сделаны для земного календаря: у календаря этого чата свои месяцы.');
       const source = template ?? normalizeTemplates(settings.calendarTemplates).find(item => item.id === templateId);
       if (!source) throw new Error('Шаблон не найден.');
       const y = Math.round(Number(year));
@@ -805,6 +986,211 @@ export async function init() {
       notify();
     },
   };
+
+  /** Weather (Мир → Погода): the plan of the chat is in the chat, the climates in the settings. */
+  async function commitWeatherPlan(change) {
+    const next = structuredClone(state);
+    next.ui ??= {};
+    next.ui.weatherPlan = normalizePlan(change(normalizePlan(next.ui.weatherPlan)));
+    await commit(next, true);
+    refreshPrompt();
+  }
+
+  /** The intimacy dice settings (Мир → Кубик). */
+  const diceCallbacks = {
+    onDiceSettings: ({ patch }) => {
+      settings.intimacyDice = updateDice(settings.intimacyDice, patch);
+      context.saveSettingsDebounced();
+      notify();
+    },
+  };
+
+  /** The characters the narrator plays and who are on stage: the persona is never among them, nor the dead. */
+  function diceNpcs() {
+    const personaId = state.ui?.personaId ?? '';
+    return presentIds(state).filter(id => id !== personaId).map(id => ({ id, name: state.entities[id].name }));
+  }
+
+  // The roll of the intimacy dice for this chat: what burns in the drawer, what is locked, whether it went out as a direction.
+  let diceNow = { picks: [], locked: [], sent: false, recorded: false };
+  const resetDice = () => { diceNow = { picks: [], locked: [], sent: false, recorded: false }; };
+  const diceView = () => (state.world?.clock?.mode === 'intim'
+    ? { groups: viewGroups(settings.intimacyDice, diceNpcs()), picks: diceNow.picks.map(pick => ({ group: pick.group, id: pick.id, text: pick.text })), locked: diceNow.locked, sent: diceNow.sent }
+    : null);
+
+  /** The roll goes out as a stage direction for the next reply (a new one replaces the old). */
+  async function diceSend({ quiet = false } = {}) {
+    try {
+      if (!settings.enabled) throw new Error('Кулисы выключены.');
+      // Safety net: the persona never leads, whatever came in.
+      const personaId = state.ui?.personaId ?? '';
+      const safe = diceNow.picks.filter(pick => pick.id !== `npc:${personaId}`);
+      if (!safe.length) throw new Error('Нечего отправлять: сначала бросьте кубик.');
+      await saveDirection(armCue(directionState(), { kind: 'dice', ...diceCue(safe), id: uniqueId('cue') }, Object.keys(state.entities)));
+      settings.intimacyDice = recordDice(settings.intimacyDice, safe, { replaceLast: diceNow.recorded });
+      context.saveSettingsDebounced();
+      diceNow.sent = true;
+      diceNow.recorded = true;
+      if (!quiet) refreshChatOverlay();
+      return true;
+    } catch (error) {
+      globalThis.toastr?.error?.(error.message, 'Кулисы');
+      return false;
+    }
+  }
+  /** After a change by hand: when the roll is already out, it goes out again as it is now. */
+  async function diceChanged() {
+    if (diceNow.sent) { if (diceNow.picks.length) await diceSend(); else await diceClear(); } else refreshChatOverlay();
+  }
+  async function diceRoll(only) {
+    const keep = diceNow.picks.filter(pick => diceNow.locked.includes(pick.group) || (only && pick.group !== only));
+    diceNow.picks = rollDice(settings.intimacyDice, { npcs: diceNpcs(), keep, only });
+    await diceChanged();
+  }
+  async function diceToggle(group, option) {
+    diceNow.picks = togglePick(settings.intimacyDice, diceNow.picks, group, option, diceNpcs());
+    await diceChanged();
+  }
+  async function diceLock(group) {
+    diceNow.locked = diceNow.locked.includes(group) ? diceNow.locked.filter(id => id !== group) : [...diceNow.locked, group];
+    refreshChatOverlay();
+  }
+  /** Her own option typed in the drawer: it joins the group and burns at once. */
+  async function diceAdd(group, text) {
+    const before = new Set(normalizeDice(settings.intimacyDice).groups[group]?.custom.map(item => item.id) ?? []);
+    settings.intimacyDice = updateDice(settings.intimacyDice, { group, addCustom: text });
+    context.saveSettingsDebounced();
+    const added = normalizeDice(settings.intimacyDice).groups[group].custom.find(item => !before.has(item.id));
+    if (added) diceNow.picks = togglePick(settings.intimacyDice, diceNow.picks, group, added.id, diceNpcs());
+    await diceChanged();
+    notify();
+  }
+  async function diceClear() {
+    const cue = directionState().cues.find(item => item.kind === 'dice');
+    resetDice();
+    if (cue) await saveDirection(removeCue(directionState(), cue.id)).catch(error => console.error('[Kulisy] Dice cue not removed.', error));
+    refreshChatOverlay();
+  }
+  /**
+   * The scene became intimate: the dice roll by themselves and go out as a direction (the chronicler moves the
+   * type after a reply, so the next reply already follows it). Switch it off in Мир → Кубик.
+   */
+  async function autoDice(before, after) {
+    const was = before?.world?.clock?.mode;
+    const now = after?.world?.clock?.mode;
+    if (was === 'intim' && now !== 'intim') { resetDice(); return; }
+    if (now !== 'intim' || was === 'intim' || !settings.enabled || !normalizeDice(settings.intimacyDice).auto) return;
+    resetDice();
+    diceNow.picks = rollDice(settings.intimacyDice, { npcs: diceNpcs() });
+    if (!diceNow.picks.length) return;
+    if (await diceSend({ quiet: true })) globalThis.toastr?.info?.(`🎲 ${diceCue(diceNow.picks).text}`, 'Кубик близости');
+    refreshChatOverlay();
+  }
+
+  const weatherCallbacks = {
+    onSetWeather: payload => worldCallbacks.onSetWeather(payload),
+    onWeatherPlan: ({ climateId, month }) => commitWeatherPlan(plan => ({
+      ...plan,
+      ...(climateId !== undefined ? { climateId: String(climateId) } : {}),
+      ...(month !== undefined ? { month: Number(month) || 0 } : {}),
+    })),
+    /** A ready scenario (templateId) or a custom one, from `startDay` (the current day when empty). */
+    onWeatherScenario: ({ templateId, scenario, startDay, days }) => commitWeatherPlan(plan => {
+      const start = Math.round(Number(startDay)) || state.world?.clock?.day || 1;
+      const template = scenario ?? BUILTIN_SCENARIOS.find(item => item.id === templateId);
+      if (!template) throw new Error('Сценарий не найден.');
+      const made = scenarioFrom(template, start, Math.round(Number(days)) || template.days);
+      if (!made) throw new Error('Для сценария нужны день начала и число дней.');
+      return addScenario(plan, made);
+    }),
+    onWeatherScenarioRemove: ({ id }) => commitWeatherPlan(plan => removeScenario(plan, id)),
+    /** A climate from one line; nothing is saved, the page shows it. */
+    onWeatherGenerate: async ({ description }) => {
+      if (isGenerationActive()) await waitForGenerationEnd();
+      return generateClimate(routedContext(SillyTavern.getContext(), settings, 'generation'), { description, id: uniqueId('climate') });
+    },
+    onWeatherSaveClimate: ({ climate, use }) => {
+      const clean = normalizeClimate(climate);
+      if (!clean) throw new Error('Климат повреждён: нужны двенадцать месяцев.');
+      settings.weatherClimates = [...normalizeClimates(settings.weatherClimates).filter(item => item.id !== clean.id), clean];
+      context.saveSettingsDebounced();
+      if (use) return commitWeatherPlan(plan => ({ ...plan, climateId: clean.id })).then(() => clean.id);
+      notify();
+      return clean.id;
+    },
+    onWeatherRemoveClimate: ({ id }) => {
+      settings.weatherClimates = normalizeClimates(settings.weatherClimates).filter(item => item.id !== id);
+      context.saveSettingsDebounced();
+      refreshPrompt();
+      notify();
+    },
+  };
+
+  /** The name library (Мир → Имена): shared by all chats, kept in the settings. */
+  const namesCallbacks = {
+    onNamesAdd: ({ name, aliases, gender, folderId }) => saveNames(library => addName(library, { name, aliases, gender, folderId }).library),
+    onNamesFolderAdd: ({ name }) => saveNames(library => addNameFolder(library, name).library),
+    onNamesFolderUpdate: ({ id, name, off }) => saveNames(library => updateNameFolder(library, id, { ...(name !== undefined ? { name } : {}), ...(off !== undefined ? { off } : {}) })),
+    onNamesFolderRemove: ({ id }) => saveNames(library => removeNameFolder(library, id)),
+    /** Several names at once: { ids, off } switches them, { ids, folderId } moves them. */
+    onNamesBulk: ({ ids, off, folderId }) => saveNames(library => changeNames(library, ids, { ...(off !== undefined ? { off } : {}), ...(folderId !== undefined ? { folderId } : {}) })),
+    onNamesUpdate: ({ id, patch }) => saveNames(library => updateName(library, id, patch)),
+    onNamesRemove: ({ id, ids }) => saveNames(library => [...new Set([...(ids ?? []), ...(id ? [id] : [])])].reduce((next, one) => removeName(next, one), library)),
+    onNamesEnabled: ({ enabled }) => saveNames(library => ({ ...library, enabled: Boolean(enabled) })),
+    /** The people of this chat (names and other spellings) that are not in the library yet. → how many were added. */
+    onNamesImport: () => {
+      let added = 0;
+      saveNames(library => {
+        let next = library;
+        for (const entity of Object.values(state.entities ?? {})) {
+          if (!entity?.name) continue;
+          const result = addName(next, { name: entity.name, aliases: entity.aliases ?? [] });
+          if (result.added) added += 1;
+          next = result.library;
+        }
+        return next;
+      });
+      return added;
+    },
+    /** Ask the model for the case forms of every name that has none yet (or of the one given). → { filled, failed, asked }. */
+    onNamesFill: async ({ id } = {}) => {
+      if (isGenerationActive()) await waitForGenerationEnd();
+      const library = normalizeNames(settings.nameLibrary);
+      const entries = library.entries.filter(entry => (id ? entry.id === id : !entry.off) && wordsToFill(entry).length);
+      if (!entries.length) return { filled: 0, failed: 0, asked: 0 };
+      const result = await fillNameForms(routedContext(SillyTavern.getContext(), settings, 'generation'), entries);
+      let filled = 0;
+      saveNames(current => {
+        let next = current;
+        for (const patch of result.patches) {
+          // The person may have typed forms while the model was thinking: only empty words are filled.
+          const entry = next.entries.find(item => item.id === patch.id);
+          if (!entry) continue;
+          const empty = new Set(wordsToFill(entry).map(word => word.word));
+          const words = patch.words.filter(word => empty.has(word.word));
+          if (!words.length) continue;
+          next = updateName(next, patch.id, { words });
+          filled += 1;
+        }
+        return next;
+      });
+      return { filled, failed: result.failed, asked: result.asked };
+    },
+    /** «Выключить в этом чате»: the library stays, this chat just does not send it. */
+    onNamesChatOff: ({ off }) => {
+      const next = structuredClone(state);
+      next.ui ??= {};
+      if (off) next.ui.namesOff = true; else delete next.ui.namesOff;
+      return commit(next, true).then(() => { refreshPrompt(); });
+    },
+  };
+
+  function saveNames(change) {
+    settings.nameLibrary = change(normalizeNames(settings.nameLibrary));
+    context.saveSettingsDebounced();
+    refreshPrompt();
+    notify();
+  }
 
   /** How the model read the pair for the last factors of a line: shown in its «Факторы роста». */
   async function rememberAnalysis(lineId, analysis) {
@@ -1313,6 +1699,161 @@ export async function init() {
     return reveals.reverse();
   }
 
+  /** Guesses at secrets the chronicler offered under replies and nobody answered; newest first. */
+  function openSecretHints(chat = SillyTavern.getContext().chat ?? []) {
+    const hints = [];
+    chat.forEach((message, messageIndex) => {
+      for (const hint of message?.extra?.[MESSAGE_EXTRA_KEY]?.secrets ?? []) {
+        const event = (state.knowledge?.events ?? []).find(item => item.id === hint.eventId);
+        if (!event || event.secret || event.disabled) continue;
+        hints.push({ messageIndex, eventId: event.id, text: event.text, names: event.witnessIds.map(id => state.entities[id]?.name).filter(Boolean).join(', ') });
+      }
+    });
+    return hints.reverse();
+  }
+
+  async function forgetSecretHint(messageIndex, eventId) {
+    const ctx = SillyTavern.getContext();
+    const marker = ctx.chat?.[messageIndex]?.extra?.[MESSAGE_EXTRA_KEY];
+    if (!marker?.secrets) return;
+    marker.secrets = marker.secrets.filter(hint => hint.eventId !== eventId);
+    if (!marker.secrets.length) delete marker.secrets;
+    await ctx.saveChat();
+  }
+
+  /** The posts a secret may be built from: the message itself, then the one before and the one after it. */
+  function secretNeighbours(chat, index) {
+    if (!Number.isInteger(index)) return [];
+    const usable = at => {
+      const message = chat[at];
+      return message && !message.is_system && String(message.mes ?? '').trim() ? { at, text: String(message.mes) } : null;
+    };
+    const nameOfMessage = message => (message?.is_user ? 'твой пост' : 'ответ');
+    return [index, index - 1, index + 1].map(usable).filter(Boolean)
+      .map((item, order) => ({ key: `m${order + 1}`, label: `#${item.at} · ${item.at === index ? 'этот ' : ''}${nameOfMessage(chat[item.at])}`, text: item.text }));
+  }
+
+  /** «Создать секрет»: from a selected passage, from an event (its proposal or its card), or from nothing. Saved only after «Сохранить». */
+  async function createSecretFlow({ text = '', messageIndex = null, eventId = null } = {}) {
+    if (!settings.enabled) throw new Error('Кулисы выключены.');
+    const ctx = SillyTavern.getContext();
+    const event = eventId ? requireEvent(eventId) : null;
+    const chat = ctx.chat ?? [];
+    const anchor = Number.isInteger(messageIndex) ? messageIndex : event ? (bornAt(state).get(event.id) ?? null) : null;
+    const quiet = routedContext(ctx, settings, 'discovery');
+    const result = await openSecretDialog(ctx, {
+      title: event ? 'Секрет из события' : 'Новый секрет',
+      text: text || event?.text || '',
+      neighbours: secretNeighbours(chat, anchor),
+      roster: Object.values(state.entities).filter(entity => !isDead(state, entity.id)).map(entity => ({ id: entity.id, name: entity.name })),
+      presentIds: presentIds(state),
+      knowIds: event?.witnessIds ?? [],
+      compose: input => composeSecret(quiet, state, { ...input, presentIds: presentIds(state) }),
+    });
+    if (!result) return null;
+    if (event) {
+      requireEvent(event.id);
+      await manualKnowledge('event.update', { eventId: event.id, changes: { text: result.label, witnessIds: result.knowIds, own: true, detail: result.detail } }, `Секрет: ${result.label}`);
+      if (Number.isInteger(messageIndex)) await forgetSecretHint(messageIndex, event.id);
+    } else {
+      await manualKnowledge('event.add', {
+        item: {
+          id: uniqueId('event'), text: result.label, witnessIds: result.knowIds, own: true, detail: result.detail,
+          ...(state.knowledge?.scene?.location ? { location: state.knowledge.scene.location } : {}), createdAt: new Date().toISOString(),
+        },
+      }, `Секрет: ${result.label}`);
+    }
+    refreshPrompt();
+    notify();
+    globalThis.toastr?.success?.(`Секрет сохранён: ${result.label}`, 'Кулисы');
+    return { saved: true };
+  }
+
+  /** Old automatic «secrets»: the model sorts real from not, the person ticks what to un-mark. */
+  async function stripAutoSecrets() {
+    if (!settings.enabled) throw new Error('Кулисы выключены.');
+    const ctx = SillyTavern.getContext();
+    const events = autoSecrets(state);
+    if (!events.length) { globalThis.toastr?.info?.('Автоматических секретов нет.', 'Кулисы'); return { changed: 0 }; }
+    globalThis.toastr?.info?.('Проверяю, какие секреты настоящие…', 'Кулисы', { timeOut: 2500 });
+    let verdicts = new Map();
+    let failure = '';
+    try { verdicts = await classifyAutoSecrets(routedContext(ctx, settings, 'discovery'), state, events); }
+    catch (error) { failure = String(error?.message ?? error); }
+    const rows = events.map((event, index) => ({ event, verdict: verdicts.get(event.id), id: `kulisy-strip-${index}` }));
+    const inputs = rows.map(row => ({
+      id: row.id,
+      label: `${row.event.text}${row.verdict ? ` — ${row.verdict.secret ? 'похоже, настоящий' : 'обычная сцена'}${row.verdict.why ? `: ${row.verdict.why}` : ''}` : ''}`,
+      defaultState: Boolean(row.verdict) && !row.verdict.secret,
+    }));
+    const popup = new ctx.Popup(
+      `<h3>Секреты, которые летописец отметил сам</h3><p>Отмеченные перестают быть секретами: событие и его свидетели остаются, уходит только пометка. Секреты из лорбука и созданные тобой не показаны.${failure ? ` Модель не ответила (${escapeHtml(failure)}): отметь сама.` : ''}</p>`,
+      ctx.POPUP_TYPE.CONFIRM, null,
+      { okButton: 'Снять секретность с отмеченных', cancelButton: 'Отмена', customInputs: inputs, wide: true, allowVerticalScrolling: true, leftAlign: true },
+    );
+    const answer = await popup.show();
+    if (answer !== ctx.POPUP_RESULT.AFFIRMATIVE) return { changed: 0 };
+    let next = state;
+    let changed = 0;
+    for (const row of rows) {
+      if (!popup.inputResults?.get(row.id) || !(next.knowledge?.events ?? []).some(item => item.id === row.event.id)) continue;
+      next = applyOperation(next, createOperation('event.update', { eventId: row.event.id, changes: { secret: false } }, {
+        transactionId: uniqueId('manual'), reason: `Секретность снята: ${row.event.text}`, timestamp: new Date().toISOString(),
+      }));
+      changed += 1;
+    }
+    if (changed) { await commit(next, true); refreshPrompt(); notify(); }
+    globalThis.toastr?.success?.(changed ? `Секретность снята: ${changed}` : 'Ничего не отмечено, всё осталось как было.', 'Кулисы');
+    return { changed };
+  }
+
+  /** Chains of near-identical events: the model proposes one text per chain, the person ticks which to fold. */
+  async function foldDuplicateEvents() {
+    if (!settings.enabled) throw new Error('Кулисы выключены.');
+    const ctx = SillyTavern.getContext();
+    const buckets = duplicateBuckets(state);
+    if (!buckets.length) { globalThis.toastr?.info?.('Событий с одинаковыми свидетелями почти нет: склеивать нечего.', 'Кулисы'); return { folded: 0 }; }
+    globalThis.toastr?.info?.('Ищу дубли среди событий…', 'Кулисы', { timeOut: 2500 });
+    const { proposals, errors, checkedIds } = await foldEvents(routedContext(ctx, settings, 'discovery'), state, buckets);
+    // Whatever the model looked at is not offered again: otherwise the button never runs out.
+    const markChecked = async () => {
+      if (!checkedIds.length) return;
+      const next = structuredClone(state);
+      next.ui ??= {};
+      next.ui.tidyEvents = [...new Set([...(next.ui.tidyEvents ?? []), ...checkedIds])];
+      await commit(next, true);
+    };
+    if (!proposals.length) {
+      if (errors.length) globalThis.toastr?.warning?.(`Модель не ответила: ${errors[0]}`, 'Кулисы');
+      else { await markChecked(); globalThis.toastr?.info?.('Склеивать нечего: все события проверены, они про разное.', 'Кулисы'); }
+      return { folded: 0 };
+    }
+    const list = proposals.map((item, index) => `<li style="margin:8px 0"><b>Группа ${index + 1}.</b> Было:<ul style="margin:2px 0;padding-left:18px">${item.was.map(entry => `<li>${escapeHtml(entry.text)}</li>`).join('')}</ul>Станет: <i>${escapeHtml(item.text)}</i></li>`).join('');
+    const inputs = proposals.map((item, index) => ({ id: `kulisy-fold-${index}`, label: `Склеить группу ${index + 1} (${item.was.length} → 1)`, defaultState: true }));
+    const popup = new ctx.Popup(
+      `<h3>Склейка событий</h3><p>Модель прошла все круги сама: каждая группа ниже уже склеена до конца. У событий в группе одни и те же свидетели. Первое событие группы получит общий текст, остальные уйдут. Что не вошло в группы, больше не предлагается.</p><ol style="text-align:left;padding-left:20px">${list}</ol>`,
+      ctx.POPUP_TYPE.CONFIRM, null,
+      { okButton: 'Склеить отмеченные', cancelButton: 'Отмена', customInputs: inputs, wide: true, allowVerticalScrolling: true, leftAlign: true },
+    );
+    const answer = await popup.show();
+    if (answer !== ctx.POPUP_RESULT.AFFIRMATIVE) return { folded: 0 };
+    let next = state;
+    let folded = 0;
+    const stamp = reason => ({ transactionId: uniqueId('manual'), reason, timestamp: new Date().toISOString() });
+    proposals.forEach((item, index) => {
+      if (!popup.inputResults?.get(inputs[index].id)) return;
+      const present = new Set((next.knowledge?.events ?? []).map(event => event.id));
+      if (!present.has(item.keepId) || item.removeIds.some(id => !present.has(id))) return;
+      next = applyOperation(next, createOperation('event.update', { eventId: item.keepId, changes: { text: item.text } }, stamp(`События склеены: ${item.text}`)));
+      for (const id of item.removeIds) next = applyOperation(next, createOperation('event.remove', { eventId: id }, stamp(`Склеено с другим событием: ${item.was.find(entry => entry.id === id)?.text ?? ''}`)));
+      folded += item.removeIds.length;
+    });
+    if (folded) { await commit(next, true); refreshPrompt(); notify(); }
+    await markChecked();
+    globalThis.toastr?.success?.(folded ? `Склеено событий: ${folded}. Остальные проверены: повторно они не предлагаются.${errors.length ? ` Часть групп модель не обработала: ${errors.length}.` : ''}` : 'Ничего не отмечено, всё осталось как было.', 'Кулисы');
+    return { folded };
+  }
+
   async function forgetReveal(messageIndex, entityId, eventId) {
     const ctx = SillyTavern.getContext();
     const marker = ctx.chat?.[messageIndex]?.extra?.[MESSAGE_EXTRA_KEY];
@@ -1379,6 +1920,9 @@ export async function init() {
       return { applied: fresh.length };
     },
     onScanSecrets: () => importLoreSecrets(),
+    onCreateSecret: payload => createSecretFlow(payload ?? {}),
+    onStripAutoSecrets: () => stripAutoSecrets(),
+    onFoldEvents: () => foldDuplicateEvents(),
     onSetScene: async ({ presentIds: ids, location }) => {
       const payload = { presentIds: ids ?? presentIds(state) };
       if (location != null) payload.location = String(location);
@@ -1767,6 +2311,9 @@ ${card.personality ?? card.data?.personality ?? ''}`;
     onAliasesFromLore: () => enrichAliases(),
     ...knowledgeCallbacks,
     ...calendarCallbacks,
+    ...namesCallbacks,
+    ...weatherCallbacks,
+    ...diceCallbacks,
     ...libraryCallbacks,
     ...chronicleRunner.callbacks,
     ...worldCallbacks,
@@ -2121,7 +2668,7 @@ ${card.personality ?? card.data?.personality ?? ''}`;
       await commitHeadcanons(headcanons);
       return added;
     },
-    onUpdateHeadcanon: async ({ key, id, text, enabled }) => {
+    onUpdateHeadcanon: async ({ key, id, text, enabled, pinned }) => {
       assertHeadcanonPair(key);
       await commitHeadcanons(updateHeadcanons(state, key, entry => {
         const item = entry.items.find(candidate => candidate.id === id);
@@ -2132,7 +2679,13 @@ ${card.personality ?? card.data?.personality ?? ''}`;
           item.text = value;
         }
         if (enabled != null) item.enabled = Boolean(enabled);
+        if (pinned != null) { if (pinned) item.pinned = true; else delete item.pinned; }
       }));
+    },
+    // «Вспомнить в следующем ответе»: a one-off stage cue with the record's text.
+    onRecallRecord: async ({ text }) => {
+      if (!settings.enabled) throw new Error('Кулисы выключены.');
+      await saveDirection(armCue(directionState(), { kind: 'recall', text, id: uniqueId('cue') }, Object.keys(state.entities)));
     },
     onRemoveHeadcanon: async ({ key, id }) => {
       assertHeadcanonPair(key);
@@ -2440,7 +2993,7 @@ ${card.personality ?? card.data?.personality ?? ''}`;
     logEvent('info', `${label}: анализ начат${force ? ' (вручную)' : ''}`);
     const headcanonKeys = autoHeadcanonKeys(sourceState, message.mes);
     const knowledge = settings.trackKnowledge !== false
-      ? { candidates: await knowledgeCandidates(sourceState, message.mes) } : null;
+      ? { candidates: await knowledgeCandidates(sourceState, message.mes), loreList: gateLoreList() } : null;
     // The scene chronicler (time, place, clothes, things) travels with the knowledge one.
     const trackWorld = settings.trackWorld !== false;
     const separateChronicle = Boolean((knowledge || trackWorld) && settings.knowledgeSeparateRequest);
@@ -2452,7 +3005,7 @@ ${card.personality ?? card.data?.personality ?? ''}`;
     if (separateChronicle) {
       try {
         const chronicle = await analyzeKnowledge(routedContext(ctx, settings, 'analysis'), sourceState, message, settings,
-          knowledge?.candidates ?? [], { knowledge: Boolean(knowledge), world: trackWorld && { library: locationLibrary.get(), wardrobe: wardrobeStore.get(), skipItemIds: shadeItems(sourceState) } });
+          knowledge?.candidates ?? [], { knowledge: Boolean(knowledge), loreList: knowledge?.loreList ?? [], world: trackWorld && { library: locationLibrary.get(), wardrobe: wardrobeStore.get(), skipItemIds: shadeItems(sourceState) } });
         result.knowledge = chronicle?.knowledge ?? null;
         result.world = chronicle?.world ?? null;
       } catch (error) {
@@ -2510,12 +3063,13 @@ ${card.personality ?? card.data?.personality ?? ''}`;
     if (!allowNewPair) return skip('анализ отменён');
     if (isStale()) return skip('чат или текст сообщения изменились');
     const applied = applyAnalysisResult(next, result, { transactionId, messageId: String(messageIndex), messageIndex }, acceptedNewCharacters,
-      { linkedScales: settings.linkedScales !== false, tempo: state.ui?.tempo ?? 'normal', allowNewPair, headcanonKeys, trackKnowledge: Boolean(knowledge), trackWorld, library: locationLibrary.get(), wardrobe: wardrobeStore.get() });
+      { linkedScales: settings.linkedScales !== false, tempo: state.ui?.tempo ?? 'normal', allowNewPair, headcanonKeys, trackKnowledge: Boolean(knowledge), trackWorld, loreTitles: knowledge?.loreList?.length ? new Set(knowledge.loreList) : null, library: locationLibrary.get(), wardrobe: wardrobeStore.get() });
     next = applied.state;
     const operations = applied.operations;
     const leaks = applied.leaks ?? [];
     const deaths = applied.deaths ?? [];
     const reveals = applied.reveals ?? [];
+    const secretHints = applied.secrets ?? [];
     const slips = applied.slips ?? [];
     for (const death of deaths) {
       logEvent('warn', `${label}: похоже, ${next.entities[death.entityId]?.name ?? death.entityId} умирает${death.note ? ` (${death.note})` : ''}${death.quote ? `: «${death.quote}»` : ''}`);
@@ -2532,7 +3086,7 @@ ${card.personality ?? card.data?.personality ?? ''}`;
       next = { ...next, ui: { ...next.ui, headcanons: added.headcanons } };
       headcanonIds.push(...added.ids);
     }
-    if (!operations.length && !headcanonIds.length && !leaks.length && !deaths.length && !reveals.length && !slips.length) return skip('модель не нашла изменений');
+    if (!operations.length && !headcanonIds.length && !leaks.length && !deaths.length && !reveals.length && !secretHints.length && !slips.length) return skip('модель не нашла изменений');
     message.extra ??= {};
     message.extra[MESSAGE_EXTRA_KEY] = {
       fingerprint: textHash,
@@ -2545,6 +3099,8 @@ ${card.personality ?? card.data?.personality ?? ''}`;
       ...(deaths.length ? { deaths } : {}),
       // A lorebook secret reaching someone is asked too: «Отметить» journals it with this message.
       ...(reveals.length ? { reveals } : {}),
+      // A guess at a real secret: only offered under the reply, nothing is written until the person confirms.
+      ...(secretHints.length ? { secrets: secretHints } : {}),
       // Continuity slips (clothes, things, time, place) of this text, for the plaque under it.
       ...(slips.length ? { slips } : {}),
       analyzedAt: new Date().toISOString(),
@@ -2711,6 +3267,7 @@ ${card.personality ?? card.data?.personality ?? ''}`;
   listen(events.CHAT_CHANGED, () => {
     chatEpoch += 1;
     state = storage.load();
+    resetDice();
     autoBindPersona(state).catch(error => console.error('[Kulisy] Persona auto-bind failed.', error));
     // Library places edited while this chat was closed: bring its cards up to date.
     try {
@@ -2720,6 +3277,10 @@ ${card.personality ?? card.data?.personality ?? ''}`;
       logEvent('warn', 'Локации чата не обновились по библиотеке', error);
     }
     sceneHeadcanons = [];
+    gateTracker.clear();
+    gateReport = null;
+    gateCatalog = [];
+    tavernBooks = null;
     refreshPrompt();
     notify();
     const epoch = chatEpoch;
@@ -2729,12 +3290,46 @@ ${card.personality ?? card.data?.personality ?? ''}`;
   });
   // Lorebook secrets never reach SillyTavern's own world info: Kulisy sends them to who knows.
   listen(events.WORLDINFO_ENTRIES_LOADED, lists => {
-    if (!settings.enabled || settings.trackKnowledge === false) return;
     try {
-      const removed = stripSecretEntries(lists);
-      if (removed) console.debug(`[Kulisy] Lorebook secrets kept out of world info: ${removed}`);
+      const loaded = [...new Set(Object.values(lists ?? {}).flatMap(list => (Array.isArray(list) ? list.map(entry => entry?.world) : [])).filter(Boolean))].sort();
+      const changed = JSON.stringify(loaded) !== JSON.stringify(tavernBooks);
+      tavernBooks = loaded;
+      if (changed) notify();
     } catch (error) {
-      console.error('[Kulisy] Lorebook secrets could not be filtered.', error);
+      console.error('[Kulisy] Could not read which lorebooks SillyTavern loaded.', error);
+    }
+    if (!settings.enabled) return;
+    if (settings.trackKnowledge !== false) {
+      try {
+        const removed = stripSecretEntries(lists);
+        if (removed) console.debug(`[Kulisy] Lorebook secrets kept out of world info: ${removed}`);
+      } catch (error) {
+        console.error('[Kulisy] Lorebook secrets could not be filtered.', error);
+      }
+    }
+    // «Суфлёр лорбуков»: sections of a character's sheet by who is on stage. Any error leaves the lists as they were.
+    if (settings.loreGate?.enabled !== true) { gateReport = null; return; }
+    try {
+      const titles = [...new Set(worldEntries(lists).map(item => item.title))];
+      if (titles.length) gateCatalog = titles;
+      const chat = SillyTavern.getContext().chat ?? [];
+      const posts = chat.filter(message => message?.is_user && !message.is_system);
+      // Whoever a stage cue is bringing in counts as on stage for this reply.
+      const called = directionState().cues.flatMap(cue => (cue.kind === 'call' || cue.kind === 'enter' ? [cue.entityId] : cue.kind === 'scene' ? (cue.castIds ?? []) : []));
+      const { decisions, report } = planGate({
+        lists, state, config: settings.loreGate,
+        presentIds: [...presentIds(state), ...called],
+        mode: state.world?.clock?.mode ?? 'calm',
+        turn: posts.length,
+        tracker: gateTracker,
+        ...gateTexts(chat),
+      });
+      applyGate(lists, decisions);
+      gateReport = report;
+      if (report.forced || report.dropped) console.debug(`[Kulisy] Суфлёр: отправлено по правилам ${report.forced}, придержано ${report.dropped} (${report.savedCharacters} зн.)`);
+    } catch (error) {
+      gateReport = null;
+      console.error('[Kulisy] Суфлёр лорбуков не сработал, записи оставлены как есть.', error);
     }
   });
   listen(events.MESSAGE_RECEIVED, messageIndex => {
@@ -2857,7 +3452,13 @@ ${card.personality ?? card.data?.personality ?? ''}`;
     return eventsOn(calendar, today).map(event => [event.time, event.title].filter(Boolean).join(' ')).filter(Boolean).slice(0, 6);
   }
 
-  const messageButtons = mountMessageButtons(index => { runManualCheck(index); });
+  const reportSecretError = error => globalThis.toastr?.error?.(error?.message ?? String(error), 'Кулисы');
+  const selectionChip = mountSelectionChip({ onCreate: selection => createSecretFlow(selection).catch(reportSecretError) });
+  const messageButtons = mountMessageButtons(index => { runManualCheck(index); }, index => {
+    // The «…» menu steals the selection on phones: use the one remembered a moment ago, else start from this post.
+    const recent = selectionChip.recent();
+    createSecretFlow(recent ? recent : { text: '', messageIndex: index }).catch(reportSecretError);
+  });
 
   /** Chips: everyone on stage, plus whoever the last messages mention (likely to come on). */
   function overlayView() {
@@ -2896,12 +3497,17 @@ ${card.personality ?? card.data?.personality ?? ''}`;
           .map(entity => ({ id: entity.id, name: entity.name }))
           .sort((left, right) => left.name.localeCompare(right.name, 'ru')),
       },
+      clock: { time: state.world?.clock?.time ?? '', day: state.world?.clock?.day ?? 0, label: state.world?.clock?.label ?? '' },
+      dice: diceView(),
+      sceneMode: state.world?.clock?.mode ?? 'calm',
+      weather: (() => { const found = currentWeather(); return found ? { kind: found.kind, temp: found.temp, source: found.source, badge: weatherBadge(found) } : null; })(),
       location: state.knowledge?.scene?.location ?? '',
       // Time and, when the calendar knows it, the date: «14:20 · вт 8 апр».
-      time: settings.trackWorld !== false ? [state.world?.clock?.time ?? '', shortDate(dateOfDay(calendarOf(), state.world?.clock?.day ?? 0))].filter(Boolean).join(' · ') : '',
+      time: settings.trackWorld !== false ? [state.world?.clock?.time ?? '', calendarShortDate(calendarOf(), dateOfDay(calendarOf(), state.world?.clock?.day ?? 0))].filter(Boolean).join(' · ') : '',
       leaks: enabled ? openLeaks() : [],
       deaths: enabled ? openDeaths() : [],
       reveals: enabled ? openReveals() : [],
+      secretHints: enabled ? openSecretHints() : [],
       secrets: enabled ? (state.knowledge?.events ?? []).filter(event => event.secret && !event.disabled).length : 0,
       waitingReveals: enabled ? openReveals().length : 0,
       slips: settings.enabled && settings.trackWorld !== false ? openSlips() : [],
@@ -2910,6 +3516,19 @@ ${card.personality ?? card.data?.personality ?? ''}`;
 
   const LEAK_ACTIONS = { swipe: 'onLeakSwipe', knows: 'onLeakKnows', dismiss: 'onLeakDismiss' };
   const chatOverlay = mountChatOverlay({
+    onDiceRoll: ({ only }) => diceRoll(only || ''),
+    onDiceToggle: ({ group, option }) => diceToggle(group, option),
+    onDiceLock: ({ group }) => diceLock(group),
+    onDiceAdd: ({ group, text }) => diceAdd(group, text),
+    onDiceSend: () => diceSend(),
+    onDiceClear: () => diceClear(),
+    onSetTime: async payload => {
+      try { await worldCallbacks.onSetClock(payload); return true; } catch (error) { globalThis.toastr?.error?.(error.message, 'Кулисы'); return false; }
+    },
+    onWeather: ({ kind, temp, lock }) => Promise.resolve(worldCallbacks.onSetWeather({ kind, temp: temp ?? '', text: '', lock }))
+      .catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
+    onSceneMode: mode => Promise.resolve(worldCallbacks.onSetClock({ mode }))
+      .catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
     onTogglePresent: (id, present) => knowledgeCallbacks.onTogglePresent({ characterId: id, present })
       .catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
     onLeak: (action, payload) => knowledgeCallbacks[LEAK_ACTIONS[action]]?.(payload)
@@ -2917,6 +3536,9 @@ ${card.personality ?? card.data?.personality ?? ''}`;
     onReveal: (action, payload) => knowledgeCallbacks[action === 'confirm' ? 'onRevealConfirm' : 'onRevealDismiss'](payload)
       .catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
     onDeath: (action, payload) => knowledgeCallbacks[action === 'confirm' ? 'onDeathConfirm' : 'onDeathDismiss'](payload)
+      .catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
+    onSecretHint: (action, payload) => Promise.resolve()
+      .then(() => (action === 'open' ? createSecretFlow({ messageIndex: payload.messageIndex, eventId: payload.eventId }) : forgetSecretHint(payload.messageIndex, payload.eventId).then(notify)))
       .catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
     onSlip: (action, payload) => {
       const handler = { swipe: 'onSlipSwipe', edit: 'onSlipEdit', accept: 'onSlipAccept', dismiss: 'onSlipDismiss', remind: 'onSlipRemind' }[action];
@@ -2990,6 +3612,7 @@ ${card.personality ?? card.data?.personality ?? ''}`;
     destroy() {
       listeners.splice(0).forEach(remove => remove());
       messageButtons.unmount();
+      selectionChip.unmount();
       chatOverlay.unmount();
       unmountShell();
       topBar.unmount();

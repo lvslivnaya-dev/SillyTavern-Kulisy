@@ -16,7 +16,7 @@
  * Order matters and is kept by applyAnalysisResult: place → clock → scene (who came
  * in) → the rest, so "three days later Rindo walks in" lets Rindo change clothes.
  */
-import { formatTime, parseTime, presentIds, uniqueId } from '../core/index.js';
+import { SCENE_MODES, WEATHER_KINDS, WEATHER_KIND_IDS, formatTime, parseTime, presentIds, uniqueId } from '../core/index.js';
 import { mentionedEntities } from './headcanon-retrieval.js';
 import { effectiveLocation, findInLibrary, linkPayloads, linkedCards } from './location-links.js';
 import { findItemInLibrary, itemFromLibrary, linkedItems } from './item-links.js';
@@ -135,9 +135,10 @@ export function buildWorldBlock(state, text, library = null, wardrobe = null, sk
 }
 
 /** Instructions appended to the analyzer's system prompt. */
-export const WORLD_INSTRUCTIONS = ` Also return "world": {"clock":{"time":"HH:MM","advanceDays":0,"label":"","flashback":false},"place":{"locationId":"listed ID or null","new":{"name":"short place","parentId":"listed ID or null","traits":["feature"]},"addTraits":[],"addNotes":[],"removeNotes":[]},"outfits":[{"entityId":"a","outfit":"full current outfit","cardIds":["listed wardrobe card IDs still worn"],"lookId":"listed look ID or null"}],"conditions":[{"entityId":"a","text":"short state","days":1}],"conditionsGone":[{"entityId":"a","conditionId":"listed ID"}],"features":[{"entityId":"a","text":"lasting look, Russian","kind":"scar"}],"featuresChanged":[{"entityId":"a","featureId":"listed ID","text":"the full new text"}],"featuresGone":[{"entityId":"a","featureId":"listed ID"}],"items":[{"itemId":"listed ID, omit for a new item","name":"short name","ownerId":"a or null","place":"where exactly","importance":"normal","secret":false}],"itemsGone":["listed ID"],"slips":[{"kind":"outfit","entityId":"a","quote":"words from the reply","note":"short Russian: what contradicts what"}]}.
+export const WORLD_INSTRUCTIONS = ` Also return "world": {"clock":{"time":"HH:MM","advanceDays":0,"label":"","flashback":false,"mode":"calm"},"weather":{"kind":"clear|cloudy|rain|storm|snow|fog|wind|heat","tempC":null,"text":""},"place":{"locationId":"listed ID or null","new":{"name":"short place","parentId":"listed ID or null","traits":["feature"]},"addTraits":[],"addNotes":[],"removeNotes":[]},"outfits":[{"entityId":"a","outfit":"full current outfit","cardIds":["listed wardrobe card IDs still worn"],"lookId":"listed look ID or null"}],"conditions":[{"entityId":"a","text":"short state","days":1}],"conditionsGone":[{"entityId":"a","conditionId":"listed ID"}],"features":[{"entityId":"a","text":"lasting look, Russian","kind":"scar"}],"featuresChanged":[{"entityId":"a","featureId":"listed ID","text":"the full new text"}],"featuresGone":[{"entityId":"a","featureId":"listed ID"}],"items":[{"itemId":"listed ID, omit for a new item","name":"short name","ownerId":"a or null","place":"where exactly","importance":"normal","secret":false}],"itemsGone":["listed ID"],"slips":[{"kind":"outfit","entityId":"a","quote":"words from the reply","note":"short Russian: what contradicts what"}]}.
 SCENE STATE RULES:
-- clock.time: story time at the END of this reply, 24-hour HH:MM. Estimate from cues (dawn, lunch, "after midnight", how long things take) and keep it consistent with the previous time; omit when nothing suggests a time. advanceDays: whole days this reply skips ("three days later" = 3; crossing midnight into the next day = 1); 0 otherwise. label: weekday or date ONLY if the text states it. flashback: true only while the reply narrates the past, false when it returns to the present.
+- clock.time: story time at the END of this reply, 24-hour HH:MM. Estimate from cues (dawn, lunch, "after midnight", how long things take) and keep it consistent with the previous time; omit when nothing suggests a time. advanceDays: whole days this reply skips ("three days later" = 3; crossing midnight into the next day = 1); 0 otherwise. label: weekday or date ONLY if the text states it. flashback: true only while the reply narrates the past, false when it returns to the present. mode: what the scene is at the END of this reply — "fight" when a physical fight or battle is under way or breaking out, "intim" when sexual intimacy is under way or clearly starting (undressing each other, heavy petting, sex), otherwise "calm". Always give it.
+- weather: the weather OUTDOORS at the END of this reply, ONLY when the reply states or clearly shows it (rain on the window, snow, a hot sun, someone shivering from cold, wet hair from rain). kind is one of the listed words; tempC a number only if stated or obvious, otherwise null; text a few Russian words about how it looks («моросит, лужи»). Omit "weather" when the reply says nothing about it, and during a flashback.
 - place.locationId: the listed card where the scene is at the END of the reply. A place that is not listed goes to "new" (a few Russian words; parentId when it is inside a listed place) with locationId null. addTraits: permanent physical features shown for the first time (layout, furniture, smell) — not people, not weather. addNotes: temporary changes of the place (a broken window, lit candles); removeNotes: exact listed note text that is no longer true. Omit "place" when the place is unclear.
 - outfits: ONLY when clothing visibly changes or is described for the first time: the FULL current outfit in Russian, not the difference. Never for [LOCKED]. Someone off stage keeps their clothes. cardIds: of the listed "wardrobe cards on", the ones still worn after the change (omit when none are listed). lookId: a listed saved look they put on as a whole ("надел форму Тосвы"), else null.
 - conditions: temporary physical states shown on page (wet, bloodied, bruise on the cheek, messy hair, drunk); days = how many story days it plausibly lasts. conditionsGone: a listed condition the reply shows ending (washed, dried, healed).
@@ -164,9 +165,14 @@ export function parseWorld(value) {
       ...(Number.isFinite(days) && days > 0 ? { advanceDays: Math.min(days, 3650) } : {}),
       ...(clip(rawClock.label, 120) ? { label: clip(rawClock.label, 120) } : {}),
       ...(typeof rawClock.flashback === 'boolean' ? { flashback: rawClock.flashback } : {}),
+      ...(SCENE_MODES.includes(rawClock.mode) ? { mode: rawClock.mode } : {}),
     };
     if (!Object.keys(clock).length) clock = null;
   }
+  const rawWeather = OBJECT(source.weather);
+  const tempC = rawWeather && rawWeather.tempC != null && rawWeather.tempC !== '' ? Math.round(Number(rawWeather.tempC)) : null;
+  const weather = rawWeather && WEATHER_KIND_IDS.includes(rawWeather.kind)
+    ? { kind: rawWeather.kind, temp: Number.isFinite(tempC) && Math.abs(tempC) <= 60 ? tempC : null, text: clip(rawWeather.text, 120) } : null;
   const rawPlace = OBJECT(source.place);
   let place = null;
   if (rawPlace) {
@@ -224,7 +230,7 @@ export function parseWorld(value) {
   const slips = list('slips', WORLD_CHRONICLE_LIMITS.slips)
     .filter(item => SLIP_KINDS.has(item.kind) && clip(item.quote, 160))
     .map(item => ({ kind: item.kind, ...(ID(item.entityId) ? { entityId: ID(item.entityId) } : {}), quote: clip(item.quote, 160), note: clip(item.note, 200) }));
-  return { clock, place, outfits, conditions, conditionsGone, features, featuresChanged, featuresGone, items, itemsGone, slips };
+  return { clock, weather, place, outfits, conditions, conditionsGone, features, featuresChanged, featuresGone, items, itemsGone, slips };
 }
 
 /**
@@ -269,6 +275,7 @@ export function materializeClock(world, api) {
   }
   const payload = {};
   if (proposed.flashback === false && clock.flashback) payload.flashback = false;
+  if (proposed.mode && proposed.mode !== (clock.mode ?? 'calm')) payload.mode = proposed.mode;
   let days = proposed.advanceDays ?? 0;
   const now = parseTime(clock.time);
   const next = proposed.time != null ? parseTime(proposed.time) : null;
@@ -278,8 +285,27 @@ export function materializeClock(world, api) {
   if (!clock.day && (next != null || days || payload.label)) payload.day = 1 + days;
   else if (days) payload.advanceDays = days;
   if (!Object.keys(payload).length) return;
-  const when = [payload.advanceDays ? `+${payload.advanceDays} дн.` : '', payload.time ?? '', payload.label ?? ''].filter(Boolean).join(', ');
+  const modeText = { calm: 'сцена спокойная', fight: 'бой', intim: 'близость' }[payload.mode] ?? '';
+  const when = [payload.advanceDays ? `+${payload.advanceDays} дн.` : '', payload.time ?? '', payload.label ?? '', modeText].filter(Boolean).join(', ');
   api.add('clock.set', payload, `Время: ${when || (payload.flashback === false ? 'конец флешбека' : 'уточнено')}`);
+}
+
+/**
+ * The weather the reply shows. Locked weather is the user's; flashbacks say nothing about now;
+ * the same weather again (same day, same kind, nothing new) is not recorded twice.
+ */
+export function materializeWeather(world, api) {
+  const proposed = world?.weather;
+  if (!proposed) return;
+  const state = api.state();
+  const clock = state.world?.clock ?? {};
+  const current = state.world?.weather;
+  if (current?.lock || clock.flashback) return;
+  const day = clock.day || 0;
+  if (current && (current.day === day || !day) && current.kind === proposed.kind
+    && (proposed.temp == null || proposed.temp === current.temp) && (!proposed.text || proposed.text === current.text)) return;
+  const keepTemp = current && current.day === day && current.kind === proposed.kind ? current.temp : null;
+  api.add('weather.set', { kind: proposed.kind, temp: proposed.temp ?? keepTemp, text: proposed.text }, `Погода: ${WEATHER_KINDS[proposed.kind].label.toLowerCase()}${proposed.text ? `, ${proposed.text}` : ''}`);
 }
 
 /** Step 4: features of the place, outfits, conditions, items. Locked entries are skipped. */

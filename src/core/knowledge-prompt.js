@@ -25,6 +25,9 @@
  */
 import { acquaintanceOf, deathOf, dossier, howKnows, isDead, presentIds } from './knowledge.js';
 
+/** A secret with a text of its own: from a lorebook entry or made by hand. Its text goes only to those who know. */
+export const hasText = event => Boolean(event?.lore || event?.own);
+
 export const KNOWLEDGE_PROMPT_DEFAULTS = Object.freeze({ maxCharacters: 2000, perCharacter: 6, text: 220, secretText: 700, dead: 10 });
 
 function clip(value, max) {
@@ -85,22 +88,22 @@ export function selectKnowledgeLines(state, options = {}) {
   const secretText = options.secretText ?? KNOWLEDGE_PROMPT_DEFAULTS.secretText;
   const characters = cast.filter(id => id !== personaId);
   const spoken = new Set((state.knowledge?.events ?? [])
-    .filter(event => event.lore && !event.disabled && characters.some(id => howKnows(state, id, event)))
+    .filter(event => hasText(event) && !event.disabled && characters.some(id => howKnows(state, id, event)))
     .map(event => event.id));
 
   // Not known / known second-hand. The persona is the user's: what they know is theirs to play.
   for (const id of characters) {
     const file = dossier(state, id);
-    const secrets = file.knows.filter(item => item.event.lore && spoken.has(item.event.id))
+    const secrets = file.knows.filter(item => hasText(item.event) && spoken.has(item.event.id))
       .map(item => `${clip(item.event.text, textLimit)} — ${clip(item.event.detail || item.event.text, secretText)}`);
     if (secrets.length) ranked.push({ rank: 3, items: secrets, head: `secret[${name(id)}]: ` });
-    const unknown = file.doesNotKnow.filter(event => !event.lore || spoken.has(event.id))
+    const unknown = file.doesNotKnow.filter(event => !hasText(event) || spoken.has(event.id))
       .map((event, order) => ({ event, order }))
       .sort((left, right) => Number(Boolean(right.event.secret)) - Number(Boolean(left.event.secret)) || right.order - left.order)
       .slice(0, perCharacter)
       .map(({ event }) => `${event.secret ? '(secret) ' : ''}${clip(event.text, textLimit)}`);
     if (unknown.length) ranked.push({ rank: 3, items: unknown, head: `unknown[${name(id)}]: ` });
-    const heard = file.knows.filter(item => item.source !== 'seen' && !item.event.lore).slice(-perCharacter)
+    const heard = file.knows.filter(item => item.source !== 'seen' && !hasText(item.event)).slice(-perCharacter)
       .map(item => `${item.source === 'rumor' ? 'rumour' : `told${item.fromId ? ` by ${name(item.fromId)}` : ''}`} — ${clip(item.event.text, textLimit)}`);
     if (heard.length) ranked.push({ rank: 5, items: heard, head: `heard[${name(id)}]: ` });
   }

@@ -14,6 +14,8 @@ export const SCENE_PROMPT_KEY = 'kulisy-scene';
 export const CALENDAR_PROMPT_KEY = 'kulisy-calendar';
 /** The user's stage directions («пнуть» a character) for the coming reply only. */
 export const DIRECTION_PROMPT_KEY = 'kulisy-direction';
+/** Spelling and case forms of names (the name library), next to the scene block. */
+export const NAMES_PROMPT_KEY = 'kulisy-names';
 
 export const DEFAULT_SETTINGS = Object.freeze({
   enabled: true,
@@ -40,8 +42,18 @@ export const DEFAULT_SETTINGS = Object.freeze({
   sendScene: true,
   // Send the narrator the story calendar: the date, today's events and what is coming.
   sendCalendar: true,
+  // Weather line in the scene block (core/weather.js).
+  sendWeather: true,
   // Calendar templates, shared by all chats (core/calendar.js toTemplate).
   calendarTemplates: [],
+  // The name library (core/name-library.js): spellings and declensions, shared by all chats.
+  // Climates made by the model or by hand (core/weather.js), shared by all chats; the ready ones are in the code.
+  weatherClimates: [],
+  // The user's own calendars (core/calendar-system.js): shared by all chats; a chat keeps its own copy of the one it uses.
+  calendarSystems: [],
+  // The intimacy dice (core/intimacy-dice.js): groups, hidden and own options, the last rolls. Shared by all chats.
+  intimacyDice: { avoidRepeat: true, groups: {}, history: [] },
+  nameLibrary: { version: 1, enabled: true, entries: [] },
   scenePromptCharacters: 1500,
   // How much of each wardrobe card's description, and of all a character wears, goes into the scene.
   looksCardCharacters: 300,
@@ -80,6 +92,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   // without a word from someone on stage before their chip shows 💤 (0 = never).
   // hotkeys: Alt+1…9 kicks the n-th character on stage.
   director: { open: false, silenceAfter: 4, hotkeys: true },
+  // «Суфлёр лорбуков» (lore-gate.js): which sections of a character's lorebook sheet go out, by who is on stage.
+  loreGate: { enabled: false, visualEvery: 6, named: 'core', sections: {} },
   // Saved custom cues («пусть приревнует»), shared by all chats.
   directionFavorites: [],
   // Auxiliary model for the extension's own requests (see llm.js). The key of the

@@ -134,11 +134,14 @@ export function dropAutoHeadcanons(state, shouldDrop) {
  * Pick headcanons for the prompt. `score(item, pair)` ranks them (semantic
  * similarity, or a mention-based fallback); items scoring <= 0 are skipped.
  */
-export function selectHeadcanons(state, { score, limit = 8, maxCharacters = 1200 } = {}) {
+export function selectHeadcanons(state, { score, limit = 8, maxCharacters = 1200, pinnedFor = null } = {}) {
   const candidates = [];
+  const pinned = [];
   for (const pair of listHeadcanonPairs(state)) {
     for (const item of pair.items) {
       if (item.enabled === false) continue;
+      // Pinned: sent whenever its pair is in the scene (pinnedFor), past the ranking and the limit.
+      if (item.pinned && (!pinnedFor || pinnedFor(pair))) { pinned.push({ pair, item }); continue; }
       const value = score ? score(item, pair) : 1;
       if (value > 0) candidates.push({ pair, item, value });
     }
@@ -146,7 +149,7 @@ export function selectHeadcanons(state, { score, limit = 8, maxCharacters = 1200
   candidates.sort((left, right) => right.value - left.value);
   const lines = [];
   let size = 0;
-  for (const candidate of candidates.slice(0, Math.max(0, limit))) {
+  for (const candidate of [...pinned, ...candidates.slice(0, Math.max(0, limit))]) {
     const line = `headcanon[${candidate.pair.label}]: ${candidate.item.text}`;
     if (size + line.length + 1 > maxCharacters) continue;
     lines.push(line);

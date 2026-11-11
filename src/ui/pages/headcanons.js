@@ -168,11 +168,20 @@ export function createHeadcanonsPage(ctx) {
       list.append(element('article', { className: `record headcanon${item.enabled === false ? ' off' : ''}` }, [
         element('div', { className: 'record-head' }, [
           element('label', { className: 'roster-item', title: 'Выключенный хедканон не отправляется модели' }, [enabled, item.enabled === false ? 'выключен' : 'включён']),
+          item.pinned ? element('span', { className: 'record-badge pinned', title: 'Отправляется всегда, когда все из этой группы в сцене', text: '📌 закреплён' }) : null,
           element('span', { className: 'record-badge', text: HEADCANON_SOURCES[item.source] ?? 'вручную' }),
           element('time', { text: formatTime(item.createdAt) }),
-        ]),
+        ].filter(Boolean)),
         element('p', { className: 'record-text', text: item.text }),
         element('div', { className: 'record-actions' }, [
+          button(item.pinned ? '📌 Открепить' : '📌 Закрепить', 'btn', () => act('onUpdateHeadcanon', { key, id: item.id, pinned: !item.pinned }, 'headcanon-pin'),
+            item.pinned ? 'Снова отбирать по сцене' : 'Отправлять всегда, когда все из этой группы в сцене: мимо отбора и лимита'),
+          button('Вспомнить сейчас', 'btn', async () => {
+            try {
+              await facade.invoke('onRecallRecord', { text: item.text });
+              setStatus('Всплывёт в следующем ответе. Снять можно в шторке над полем ввода.');
+            } catch (error) { setStatus(error?.message || 'Не удалось поставить напоминание', true); }
+          }, 'Разово: в следующем ответе это всплывёт в сцене'),
           button('Изменить', 'btn', () => { editingHeadcanonId = item.id; render(); }),
           button('Удалить', 'btn', () => act('onRemoveHeadcanon', { key, id: item.id }, 'headcanon-remove')),
         ]),

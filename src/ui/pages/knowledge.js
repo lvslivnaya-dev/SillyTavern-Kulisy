@@ -386,8 +386,19 @@ export function createKnowledgePages(ctx) {
     ]));
     const list = element('div', { className: 'record-list' });
     for (const event of [...events()].reverse()) list.append(renderEvent(event, state));
+    const foldable = state.tidy?.foldable ?? 0;
+    const fold = button('Свернуть дубли', 'btn', async () => {
+      fold.disabled = true;
+      setStatus('Ищу дубли среди событий…');
+      try {
+        const result = await ctx.facade.invoke('onFoldEvents', {});
+        setStatus(result?.folded ? `Склеено событий: ${result.folded}` : 'Без изменений');
+      } catch (error) { setStatus(error?.message || 'Не удалось свернуть дубли', true); }
+      finally { fold.disabled = false; render(); }
+    }, 'Модель находит цепочки событий с одними и теми же свидетелями (одна сцена, записанная по шагам) и предлагает один текст на цепочку. Ничего не меняется, пока не нажмёшь «Склеить отмеченные»');
     view.append(element('div', { className: 'card' }, [
       element('h3', { text: `События: ${events().length}` }),
+      element('div', { className: 'row', style: { marginBottom: '8px' } }, [fold, element('span', { className: 'muted', style: { fontSize: '12px' }, text: foldable ? `Ещё не проверено: ${foldable}. Одно нажатие доводит всё до конца, второй раз жать не нужно.` : 'Все события проверены. Новые события той же сцены летописец дописывает к предыдущему сам.' })]),
       events().length ? list : empty('Событий пока нет. Летописец добавит их по ходу игры, или впишите выше.'),
     ]));
     return view;
@@ -438,6 +449,7 @@ export function createKnowledgePages(ctx) {
       ]),
       ...(later.length ? [element('p', { className: 'muted', style: { fontSize: '12px', margin: '6px 0 0' }, text: `узнали позже: ${later.join(', ')}` })] : []),
       element('div', { className: 'record-actions' }, [
+        ...(event.secret || event.lore ? [] : [button('Сделать секретом', 'btn', () => act('onCreateSecret', { eventId: event.id }, 'event-secret'), 'Составить секрет из этого события: подпись для тех, кто не знает, и подробности для знающих. Проверишь перед сохранением')]),
         button('Изменить', 'btn', () => { editingEventId = event.id; render(); }),
         button('Удалить', 'btn', () => act('onRemoveEvent', { eventId: event.id }, 'event-remove')),
       ]),
@@ -501,7 +513,21 @@ export function createKnowledgePages(ctx) {
       } catch (error) { setStatus(error?.message || 'Не удалось прочитать секреты', true); }
       finally { scan.disabled = false; }
     }, 'Записи лорбука с названием «[Секрет] …» или «[Секрет: Имя] …»');
-    view.append(element('div', { className: 'row' }, [scan, element('span', { className: 'muted', style: { fontSize: '12px' }, text: 'Клик по имени — знает / не знает.' })]));
+    const create = button('Создать секрет', 'btn primary', async () => {
+      try { await ctx.facade.invoke('onCreateSecret', {}); render(); }
+      catch (error) { setStatus(error?.message || 'Не удалось создать секрет', true); }
+    }, 'Впиши или вставь фрагмент истории: ИИ составит подпись и подробности, ты проверишь. Проще выделить текст прямо в чате: над ним появится кнопка «Создать секрет»');
+    const strayCount = state.tidy?.autoSecrets ?? 0;
+    const tidy = strayCount ? button(`Разобрать автосекреты (${strayCount})`, 'btn', async () => {
+      tidy.disabled = true;
+      setStatus('Проверяю, какие секреты настоящие…');
+      try {
+        const result = await ctx.facade.invoke('onStripAutoSecrets', {});
+        setStatus(result?.changed ? `Секретность снята: ${result.changed}` : 'Без изменений');
+      } catch (error) { setStatus(error?.message || 'Не удалось разобрать секреты', true); }
+      finally { tidy.disabled = false; render(); }
+    }, 'Секреты, которые летописец отмечал сам раньше. Модель подскажет, какие настоящие; снять пометку можно с любых, событие и свидетели остаются') : null;
+    view.append(element('div', { className: 'row' }, [create, scan, ...(tidy ? [tidy] : []), element('span', { className: 'muted', style: { fontSize: '12px' }, text: 'Клик по имени — знает / не знает.' })]));
 
     const waiting = state.reveals ?? [];
     if (waiting.length) {
@@ -518,7 +544,7 @@ export function createKnowledgePages(ctx) {
 
     const secrets = events().filter(event => event.secret);
     if (!secrets.length) {
-      view.append(element('p', { className: 'muted', text: 'Секретов пока нет. Их приносят лорбук («[Секрет] …») и летописец; событие можно отметить секретом и в «Ленте событий».' }));
+      view.append(element('p', { className: 'muted', text: 'Секретов пока нет. Их приносят лорбук («[Секрет] …»), выделенный в чате текст («Создать секрет») и подсказки летописца под сообщениями; событие можно сделать секретом и в «Ленте событий».' }));
       return view;
     }
     // Lorebook secrets first, then the newest.

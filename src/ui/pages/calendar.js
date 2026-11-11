@@ -1,5 +1,6 @@
 import { button, characterId, characterName, element } from '../helpers.js';
-import { MONTHS, addDays, eventsOn, humanDate, parseDate, upcoming, weekdayOf } from '../../core/calendar.js';
+import { MONTHS, clockOf, eventsOn, upcoming } from '../../core/calendar.js';
+import { createCalendarBuilder } from './calendar-builder.js';
 
 /**
  * «Календарь» (Мир → Календарь): the story's dates, a month grid, events of a day,
@@ -26,6 +27,39 @@ export function createCalendarPages(ctx) {
   const characters = () => snapshot().characters ?? [];
   const nameOf = id => characterName(characters().find(item => characterId(item) === id), id);
   const thisYear = () => Number((today() || calendar().anchor || new Date().toISOString()).slice(0, 4));
+  /** The rules of dates of this chat's calendar (earthly or its own). */
+  const cal = () => clockOf(calendar());
+  const humanDate = (iso, options) => cal().humanDate(iso, options);
+  const addDays = (iso, days) => cal().addDays(iso, days);
+  const weekdayOf = iso => cal().weekdayOf(iso);
+  const parseDate = iso => (cal().valid(iso) ? cal().parse(iso) : null);
+
+  /**
+   * A date field: the browser's date picker for the earthly calendar; day, month and year for your own
+   * (the browser does not know its months). The returned node has `.value` like an input: 'Y-MM-DD' or ''.
+   */
+  function dateInput(value, attrs = {}) {
+    const clock = cal();
+    if (!clock.custom) return element('input', { type: 'date', value: value ?? '', ...attrs });
+    const wrapper = element('div', { className: 'ku-cal-date', role: 'group', 'aria-label': attrs['aria-label'] ?? 'Дата' });
+    const [y, m, d] = /^\d+-\d+-\d+$/.test(value ?? '') ? value.split('-').map(Number) : [0, 0, 0];
+    const day = element('input', { type: 'number', min: 1, max: 99, value: d || '', placeholder: 'день', className: 'ku-short', 'aria-label': 'День месяца' });
+    const monthSelect = element('select', { 'aria-label': 'Месяц' }, [element('option', { value: '', text: 'месяц', selected: !m }), ...clock.monthNames.map((name, index) => element('option', { value: index + 1, text: name, selected: m === index + 1 }))]);
+    const year = element('input', { type: 'number', min: 1, max: 9999, value: y || '', placeholder: 'год', className: 'ku-short', 'aria-label': 'Год' });
+    wrapper.append(day, monthSelect, year);
+    Object.defineProperty(wrapper, 'value', {
+      get: () => (day.value && monthSelect.value && year.value ? `${String(year.value).padStart(4, '0')}-${String(monthSelect.value).padStart(2, '0')}-${String(day.value).padStart(2, '0')}` : ''),
+      set: () => {},
+    });
+    return wrapper;
+  }
+  /** Same for events: the editor's draft keeps the text of the field. */
+  function dateField(event, key, attrs = {}) {
+    const node = dateInput(event[key], attrs);
+    node.addEventListener('input', () => { event[key] = node.value; });
+    node.addEventListener('change', () => { event[key] = node.value; });
+    return node;
+  }
 
   async function attempt(run, done) {
     try { const result = await run(); if (done) setStatus(typeof done === 'function' ? done(result) : done); return result; }
@@ -39,7 +73,7 @@ export function createCalendarPages(ctx) {
   // ---- «Сегодня в истории» --------------------------------------------------
   function renderToday() {
     const day = snapshot().world?.clock?.day ?? 0;
-    const input = element('input', { type: 'date', value: today(), 'aria-label': 'Какая сегодня дата в истории' });
+    const input = dateInput(today(), { 'aria-label': 'Какая сегодня дата в истории' });
     const save = button('Запомнить', 'btn small primary', () => attempt(() => act('onCalendarSetToday', { date: input.value }, 'calendar-today'), 'Дата истории записана'));
     const text = today()
       ? `Сегодня в истории: ${humanDate(today())}${day ? ` (день ${day})` : ''}. Дальше даты идут сами, вслед за днями истории.`
@@ -54,21 +88,30 @@ export function createCalendarPages(ctx) {
 
   // ---- Month grid -------------------------------------------------------------
   function renderMonth() {
-    const base = month || (selected || today() || new Date().toISOString().slice(0, 10)).slice(0, 7);
+    const clock = cal();
+    const N = clock.monthsCount;
+    const W = clock.weekdayCount;
+    const pad = (year, monthNumber) => `${String(year).padStart(4, '0')}-${String(monthNumber).padStart(2, '0')}`;
+    const fallback = clock.custom ? '0001-01-01' : new Date().toISOString().slice(0, 10);
+    const known = value => (clock.valid(value) ? value : '');
+    const base = month || (known(selected) || known(today()) || fallback).slice(0, 7);
     month = base;
     const first = `${base}-01`;
-    const offset = weekdayOf(first) - 1;
-    const start = addDays(first, -offset);
     const [year, monthNumber] = base.split('-').map(Number);
+    const offset = clock.weekdayOf(first) - 1;
+    const start = clock.addDays(first, -offset);
+    const length = clock.daysInMonth(year, monthNumber);
+    const rows = clock.custom ? Math.ceil((offset + length) / W) : 6;
     const shift = delta => {
-      const date = new Date(Date.UTC(year, monthNumber - 1 + delta, 1));
-      month = `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}`;
+      const total = Math.max(0, year * N + (monthNumber - 1) + delta);
+      month = pad(Math.max(1, Math.floor(total / N)), (total % N) + 1);
       render();
     };
-    const grid = element('div', { className: 'ku-cal-grid', role: 'grid' });
-    for (const label of ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс']) grid.append(element('span', { className: 'ku-cal-head', text: label }));
-    for (let index = 0; index < 42; index += 1) {
-      const iso = addDays(start, index);
+    const grid = element('div', { className: 'ku-cal-grid', role: 'grid', style: { gridTemplateColumns: `repeat(${W}, minmax(0, 1fr))` } });
+    for (const label of clock.weekdayShort) grid.append(element('span', { className: 'ku-cal-head', text: label }));
+    for (let index = 0; index < rows * W; index += 1) {
+      const iso = start ? clock.addDays(start, index) : '';
+      if (!iso) { grid.append(element('span', { className: 'ku-cal-cell other', 'aria-hidden': 'true' })); continue; }
       const items = eventsOn(calendar(), iso);
       const cell = element('button', {
         type: 'button',
@@ -83,11 +126,13 @@ export function createCalendarPages(ctx) {
       cell.addEventListener('click', () => { selected = iso; draft = null; render(); });
       grid.append(cell);
     }
+    const season = clock.custom ? clock.seasonOf(monthNumber) : null;
     return element('div', { className: 'card' }, [
       element('div', { className: 'ku-row' }, [
         button('‹', 'btn small', () => shift(-1), 'Предыдущий месяц'),
-        element('strong', { className: 'ku-cal-title', text: `${MONTHS[monthNumber - 1]} ${year}` }),
+        element('strong', { className: 'ku-cal-title', text: `${clock.monthNames[monthNumber - 1] ?? ''} ${year}${clock.custom && clock.system.era ? ` ${clock.system.era}` : ''}` }),
         button('›', 'btn small', () => shift(1), 'Следующий месяц'),
+        ...(season ? [element('span', { className: 'muted ku-small', text: season.name })] : []),
         element('span', { className: 'ku-push' }),
         ...(today() ? [button('К сегодняшнему', 'btn small', () => { month = today().slice(0, 7); selected = today(); render(); })] : []),
       ]),
@@ -98,7 +143,7 @@ export function createCalendarPages(ctx) {
   // ---- A day: its events and the editor ---------------------------------------
   function describe(event) {
     const parts = [];
-    if (event.repeat === 'weekly') parts.push(`по ${(event.weekdays ?? []).map(day => ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'][day - 1]).join(', ')}`);
+    if (event.repeat === 'weekly') parts.push(`по ${(event.weekdays ?? []).map(day => cal().weekdayShort[day - 1]).join(', ')}`);
     if (event.repeat === 'daily') parts.push('каждый день');
     if (event.repeat === 'yearly') parts.push('каждый год');
     if (event.endDate) parts.push(`${humanDate(event.date, { weekday: false })} – ${humanDate(event.endDate, { weekday: false })}`);
@@ -150,7 +195,7 @@ export function createCalendarPages(ctx) {
     const repeat = element('select', {}, [['none', 'Один раз / отрезок'], ['weekly', 'По дням недели'], ['daily', 'Каждый день'], ['yearly', 'Каждый год']]
       .map(([value, text]) => element('option', { value, text, selected: event.repeat === value })));
     repeat.addEventListener('change', () => { event.repeat = repeat.value; render(); });
-    const weekdays = element('div', { className: 'ku-cal-weekdays' }, ['пн', 'вт', 'ср', 'чт', 'пт', 'сб', 'вс'].map((label, index) => {
+    const weekdays = element('div', { className: 'ku-cal-weekdays' }, cal().weekdayShort.map((label, index) => {
       const box = element('input', { type: 'checkbox', checked: (event.weekdays ?? []).includes(index + 1) });
       box.addEventListener('change', () => {
         const set = new Set(event.weekdays ?? []);
@@ -177,13 +222,13 @@ export function createCalendarPages(ctx) {
       field('Что', input('title', { placeholder: 'Контрольная по анатомии', maxlength: 120 })),
       field('Подробности', note),
       element('div', { className: 'ku-cal-fields' }, [
-        field('Дата', input('date', { type: 'date' })),
-        field('По какое (если несколько дней)', input('endDate', { type: 'date' })),
+        field('Дата', dateField(event, 'date')),
+        field('По какое (если несколько дней)', dateField(event, 'endDate')),
         field('Время', input('time', { type: 'time' })),
       ]),
       element('div', { className: 'ku-cal-fields' }, [
         field('Повтор', repeat),
-        ...(event.repeat !== 'none' ? [field('До какого числа', input('until', { type: 'date' }), 'пусто — без конца')] : []),
+        ...(event.repeat !== 'none' ? [field('До какого числа', dateField(event, 'until'), 'пусто — без конца')] : []),
       ]),
       ...(event.repeat === 'weekly' ? [weekdays] : []),
       field('Кого касается', who, 'никто не выбран — события мира, для всех'),
@@ -228,6 +273,9 @@ export function createCalendarPages(ctx) {
 
   // ---- Templates and the generator -----------------------------------------------
   function renderTemplates() {
+    if (cal().custom) {
+      return element('div', { className: 'card' }, [element('h3', { text: 'Шаблоны и генерация' }), element('p', { className: 'muted ku-small', text: 'Шаблоны и генератор года сделаны для земного календаря. У календаря этого чата свои месяцы, события добавляйте на нужные дни вручную. Повторы («каждый год», «по дням недели») работают.' })]);
+    }
     const card = element('div', { className: 'card' }, [element('h3', { text: 'Шаблоны и генерация' })]);
     const yearInput = element('input', { type: 'number', min: 1, max: 9999, value: thisYear(), className: 'ku-short', 'aria-label': 'Год, с которого начинается шаблон' });
     // The generator.
@@ -305,11 +353,13 @@ export function createCalendarPages(ctx) {
     return card;
   }
 
+  const builder = createCalendarBuilder(ctx, { attempt });
+
   function renderCalendar() {
     if (!selected && today()) selected = today();
     if (draft && !parseDate(draft.date)) draft.date = selected;
     const view = element('div', { className: 'records-view ku-calendar' });
-    view.append(renderToday(), renderMonth(), renderDay(), ...[renderSoon()].filter(Boolean), renderTemplates());
+    view.append(renderToday(), builder.renderBuilder(), renderMonth(), renderDay(), ...[renderSoon()].filter(Boolean), renderTemplates());
     return view;
   }
 
@@ -319,6 +369,7 @@ export function createCalendarPages(ctx) {
 export const CALENDAR_STYLE = `
 .ku-calendar{container-type:inline-size}
 .ku-cal-title{min-width:130px;text-align:center}
+.ku-cal-date{display:flex;gap:6px;flex-wrap:wrap}.ku-cal-date select{width:auto;min-width:0;flex:1 1 120px}
 .ku-cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;margin-top:8px}
 .ku-cal-head{font-size:11px;text-align:center;color:var(--k-muted);text-transform:uppercase}
 .ku-cal-cell{display:flex;flex-direction:column;gap:2px;align-items:stretch;min-height:64px;min-width:0;padding:4px;border:1px solid var(--k-line);border-radius:10px;background:var(--k-panel);color:var(--k-text);font:inherit;text-align:left;cursor:pointer;overflow:hidden}

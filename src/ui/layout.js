@@ -19,6 +19,9 @@ export const NAV_GROUPS = Object.freeze([
     ['items', 'Вещи', 'bag'],
     ['wardrobe', 'Гардероб', 'shirt'],
     ['calendar', 'Календарь', 'calendar'],
+    ['weather', 'Погода', 'cloud'],
+    ['dice', 'Кубик', 'dice'],
+    ['names', 'Имена', 'tag'],
   ]) }),
   Object.freeze({ id: 'relations', title: 'Отношения', items: Object.freeze([
     ['overview', 'Обзор пар', 'heart'],

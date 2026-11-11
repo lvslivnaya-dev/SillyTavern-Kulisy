@@ -4,7 +4,7 @@
  * journaled manual operation, so it shows in the history and survives swipes of
  * other replies; whatever the user writes by hand can be locked against the chronicler.
  */
-import { createOperation, dropOperation, parseTime, uniqueId } from '../core/index.js';
+import { WEATHER_KINDS, WEATHER_KIND_IDS, createOperation, dropOperation, parseTime, uniqueId } from '../core/index.js';
 
 function meta(reason) {
   return { transactionId: uniqueId('manual'), reason, timestamp: new Date().toISOString() };
@@ -48,7 +48,7 @@ export function createWorldCallbacks(deps) {
 
   const callbacks = {
     // ---- Clock and place ------------------------------------------------
-    onSetClock: ({ day, time, label, flashback }) => {
+    onSetClock: ({ day, time, label, flashback, mode }) => {
       const payload = {};
       if (day != null && day !== '') payload.day = Number(day);
       if (time != null) {
@@ -57,8 +57,15 @@ export function createWorldCallbacks(deps) {
       }
       if (label != null) payload.label = label;
       if (flashback != null) payload.flashback = Boolean(flashback);
+      if (mode != null) payload.mode = String(mode);
       if (!Object.keys(payload).length) return null;
-      return run('clock.set', payload, 'Ручная правка времени');
+      return run('clock.set', payload, mode != null && Object.keys(payload).length === 1 ? 'Тип сцены задан вручную' : 'Ручная правка времени');
+    },
+    /** Weather by hand: { kind, temp, text, lock }, or { clear: true } to hand it back to the forecast. */
+    onSetWeather: ({ kind, temp, text, lock, clear }) => {
+      if (clear) return run('weather.set', { clear: true }, 'Погода: по прогнозу');
+      if (!WEATHER_KIND_IDS.includes(kind)) throw new Error('Не знаю такой погоды.');
+      return run('weather.set', { kind, temp: temp === '' ? null : temp, text, lock: Boolean(lock) }, `Погода: ${WEATHER_KINDS[kind].label.toLowerCase()}${lock ? ' (держать)' : ''}`);
     },
     /** A place card of this chat, or free text (a matching card is picked up by name). */
     onSetSceneLocation: ({ locationId, location }) => {

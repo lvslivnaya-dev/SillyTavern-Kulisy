@@ -9,7 +9,18 @@
  * Pure: no DOM, no SillyTavern. index.js feeds it the generation type and the chat.
  */
 
-export const CUE_KINDS = Object.freeze(['enter', 'react', 'custom', 'factor', 'secret', 'hold', 'focus', 'call', 'leave', 'event', 'scene', 'note']);
+/** Ready genres of a scene event (the «⚡ Событие» pills): the label on the button and what the narrator is told. */
+export const EVENT_GENRES = Object.freeze({
+  fight: { label: 'Драка', icon: '👊', en: 'a fight: the tension breaks into blows, the characters get physical' },
+  conflict: { label: 'Конфликт', icon: '⚔', en: 'an open conflict flares up: a heated quarrel or a standoff that nobody can ignore' },
+  drama: { label: 'Драма', icon: '🎭', en: 'an emotional drama: a painful confession, a rupture or a loss that hits the characters hard' },
+  massacre: { label: 'Резня', icon: '🩸', en: 'a massacre: mass killing, brutal and graphic, with lasting consequences for the survivors' },
+  rape: { label: 'Изнасилование', icon: '⛓', en: 'a rape: a sexual assault is committed against a character, written in the story\'s own tone, with its real consequences for those involved' },
+  violence: { label: 'Насилие', icon: '🥀', en: 'an act of violence is committed against a character, with real physical and emotional consequences' },
+  pressure: { label: 'Психологическое давление', icon: '🕸', en: 'psychological pressure: manipulation, intimidation, gaslighting or coercion aimed at a character' },
+});
+
+export const CUE_KINDS = Object.freeze(['enter', 'react', 'custom', 'factor', 'secret', 'hold', 'focus', 'call', 'leave', 'event', 'scene', 'note', 'recall', 'dice']);
 export const DIRECTION_LIMITS = Object.freeze({ cues: 20, text: 400, sceneText: 1200, place: 120, cast: 20, wait: 9, favorites: 30, favorite: 200 });
 /** How much story time a new scene skips (the narrator's words; the chronicler moves the clock). */
 export const SCENE_SKIPS = Object.freeze({ none: '', hour: 'an hour later', evening: 'later that evening', nextday: 'the next day', week: 'a week later' });
@@ -59,9 +70,19 @@ function normalizeCue(raw, knownIds) {
     if (cast.length) cue.castIds = cast;
   }
   const text = clip(raw.text, raw.kind === 'scene' ? DIRECTION_LIMITS.sceneText : DIRECTION_LIMITS.text);
-  if (['custom', 'factor', 'secret', 'note'].includes(raw.kind) && !text) return null;
+  if (['custom', 'factor', 'secret', 'note', 'recall'].includes(raw.kind) && !text) return null;
   if (text) cue.text = text;
   if (raw.label) cue.label = clip(raw.label, 120);
+  if (raw.kind === 'dice') {
+    // The intimacy dice: `text` is the short Russian line, `detail` what the narrator is told.
+    const detail = clip(raw.detail, 700);
+    if (!detail || !cue.text) return null;
+    cue.detail = detail;
+  }
+  if (raw.kind === 'event' && Object.hasOwn(EVENT_GENRES, raw.genre)) {
+    cue.genre = raw.genre;
+    if (!cue.text) cue.text = EVENT_GENRES[raw.genre].label;
+  }
   if (raw.kind === 'secret' && typeof raw.eventId === 'string') cue.eventId = raw.eventId;
   return cue;
 }
@@ -83,6 +104,9 @@ export function armCue(direction, raw, knownIds = null) {
   const clash = old => {
     if (old.kind === 'focus' && cue.kind === 'focus') return true;
     if (old.kind === 'scene' && cue.kind === 'scene') return true; // one new scene per reply
+    if (old.kind === 'dice' && cue.kind === 'dice') return true; // one roll per reply
+    // The same thing to recall is armed once; different ones add up.
+    if (old.kind === 'recall' && cue.kind === 'recall') return old.text === cue.text;
     if (!cue.entityId || old.entityId !== cue.entityId) return false;
     if (EXCLUSIVE.has(old.kind) && EXCLUSIVE.has(cue.kind)) return true;
     // «Молчит» and «Только он» for the same character contradict each other.
@@ -163,13 +187,15 @@ export function cueLabel(cue, nameOf) {
     case 'event': return cue.text ? `событие: ${clip(cue.text, 40)}` : 'событие';
     case 'scene': return `новая сцена${cue.text ? `: ${clip(cue.text, 40)}` : ''}`;
     case 'note': return `рассказчику: ${clip(cue.text, 40)}`;
+    case 'recall': return `вспомнить: ${clip(cue.text, 40)}`;
+    case 'dice': return `кубик: ${clip(cue.text, 60)}`;
     default: return cue.kind;
   }
 }
 
 /** Badge shown on a character's chip for their armed or active cue. */
 export function cueBadge(cue) {
-  return { enter: '👟', react: '💬', custom: '✍', factor: '❤', secret: '🔒', hold: '🤐', focus: '🎯', call: '🚪', leave: '🚪', event: '⚡', scene: '🎬', note: '📝' }[cue.kind] ?? '👟';
+  return { enter: '👟', react: '💬', custom: '✍', factor: '❤', secret: '🔒', hold: '🤐', focus: '🎯', call: '🚪', leave: '🚪', event: '⚡', scene: '🎬', note: '📝', recall: '📌', dice: '🎲' }[cue.kind] ?? '👟';
 }
 
 function cueLine(cue, nameOf, presentSet) {
@@ -192,7 +218,10 @@ function cueLine(cue, nameOf, presentSet) {
     case 'focus': return `This reply centres on ${name}; everyone else stays in the background.`;
     case 'call': return `${name} comes into the scene in this reply (arrives, calls, catches up, is brought in — whatever fits where they were). Show how they come in.`;
     case 'leave': return `${name} leaves the scene in this reply, for a reason that fits the moment. Show them go.`;
-    case 'event': return cue.text
+    case 'event': if (EVENT_GENRES[cue.genre]) {
+      const genre = EVENT_GENRES[cue.genre];
+      return `Something happens in this reply that changes the scene, genre: ${genre.en}. Keep to the people and the place of the scene and let the characters react in character.${cue.text && cue.text !== genre.label ? ` Details: ${cue.text}.` : ''}`;
+    } else return cue.text
       ? `Something happens in this reply that changes the scene: ${cue.text}. Let the characters react.`
       : 'Something happens in this reply that shakes up the scene: pick what fits the place, time and mood (a call, a visitor, the weather, a noise, news). Let the characters react.';
     case 'scene': {
@@ -206,6 +235,8 @@ function cueLine(cue, nameOf, presentSet) {
       ].filter(Boolean).join(' ');
     }
     case 'note': return `Note for the narrator: ${cue.text}`;
+    case 'dice': return `The intimate scene in this reply takes this direction (a roll of the dice; adapt it to where the scene really is and who is in it, never announce it): ${cue.detail}. {{user}} is never the one who leads and is never written for: show only what the other characters do, say and think, and leave {{user}}'s side to the user.`;
+    case 'recall': return `Bring this back into play in this reply: «${cue.text}». Someone who knows it recalls it, mentions it, or it visibly shapes how they act — woven into the scene, not recited. Those who do not know it must not refer to it.`;
     default: return '';
   }
 }

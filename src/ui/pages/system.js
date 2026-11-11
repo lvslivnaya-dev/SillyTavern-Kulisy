@@ -1,6 +1,8 @@
 import { button, downloadJson, element, formatTime, nextControlId } from '../helpers.js';
 import { icon } from '../icons.js';
 import { nextSceneText } from '../../integration/chronicle-actions.js';
+import { GATE_ABSENT, GATE_NAMED, GATE_SECTIONS, GATE_WHEN, GATE_WORLD, SCENE_MODE_LABELS } from '../../integration/lore-gate.js';
+import { readable } from '../../integration/prompt-overview.js';
 
 /** Settings page: section menu + rows with switches; narrow panels stack the menu on top. */
 export const SETTINGS_STYLE = `
@@ -17,6 +19,14 @@ export const SETTINGS_STYLE = `
 .set-list{border:1px solid var(--rs-line);border-radius:14px;background:var(--rs-panel);overflow:hidden}
 .set-item+.set-item{border-top:1px solid var(--rs-line)}
 .set-row{display:flex;align-items:center;gap:12px;padding:11px 14px;min-height:46px}
+.set-select{width:100%;max-width:100%;min-width:0;margin:0;font:inherit;color:var(--rs-text);background:var(--rs-inset);border:1px solid var(--rs-line);border-radius:8px;padding:5px 8px}
+.set-row.wide{flex-wrap:wrap}.set-row.wide .set-label{flex:1 1 0;min-width:0}.set-row.wide .set-select{flex:1 1 100%;order:3}
+.set-row.gate-rule{display:grid;grid-template-columns:minmax(120px,1fr) minmax(0,1.5fr) minmax(0,1.1fr);align-items:center}
+.set-row.gate-rule .set-label{overflow-wrap:anywhere}
+.set-row.gate-person{flex-wrap:wrap}.set-row.gate-person .set-label{flex:0 0 170px}.set-row.gate-person .set-pills{flex:1 1 260px}
+@container (max-width:640px){.set-row.gate-rule{grid-template-columns:1fr}}
+.set-seg{display:flex;flex-wrap:wrap;gap:6px}
+.set-pill.gate-off{color:var(--rs-muted);text-decoration:line-through}
 .set-label{flex:1;min-width:0;font-size:13.5px}
 .set-hint{margin:-4px 14px 10px;font-size:12px;line-height:1.45;color:var(--rs-muted)}
 .set-help{width:24px;height:24px;min-height:24px;padding:0;border-radius:50%;border:1px solid var(--rs-line);background:transparent;color:var(--rs-muted);font:inherit;font-size:11px;font-weight:700;cursor:pointer;flex:0 0 auto}
@@ -48,6 +58,37 @@ export const SETTINGS_STYLE = `
 .set-segment button{flex:1 1 110px;min-height:46px;border:0;border-radius:9px;background:transparent;color:var(--rs-muted);font:inherit;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;cursor:pointer}
 .set-segment button strong{font-size:13px}.set-segment button span{font-size:11px}
 .set-segment button.on{background:var(--rs-bg);color:var(--rs-accent);box-shadow:0 1px 4px var(--k-shadow)}
+.pm-bar{display:flex;height:12px;border-radius:8px;overflow:hidden;background:var(--rs-inset);border:1px solid var(--rs-line)}
+.pm-bar i{display:block;min-width:3px}
+.pm-legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:13px}
+.pm-dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px;vertical-align:-1px}
+.pm-block{border:1px solid var(--rs-line);border-radius:16px;background:var(--rs-panel);padding:16px 18px;display:flex;flex-direction:column;gap:12px}
+.pm-block.off,.pm-block.empty{opacity:.82}
+.pm-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pm-index{flex:0 0 auto;width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:700;background:color-mix(in srgb,var(--rs-accent) 16%,transparent);color:var(--rs-accent)}
+.pm-title{margin:0;font-size:17px;line-height:1.3;flex:1 1 220px;min-width:0}
+.pm-pill{font-size:12.5px;font-weight:700;padding:3px 11px;border-radius:20px;border:1px solid var(--rs-line);color:var(--rs-muted)}
+.pm-pill.on{border-color:var(--rs-accent);color:var(--rs-accent)}
+.pm-tokens{font-size:14px;font-weight:700;font-variant-numeric:tabular-nums}
+.pm-meta{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:6px 16px;margin:0;font-size:14px;line-height:1.5}
+.pm-meta dt{color:var(--rs-muted);font-weight:700}.pm-meta dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.pm-links{display:flex;flex-wrap:wrap;gap:4px 18px}
+.pm-fold{border-top:1px solid var(--rs-line);padding-top:10px}
+.pm-fold>summary{cursor:pointer;font-size:14.5px;font-weight:700;padding:2px 0}
+.pm-fold .pm-fold{border-top:0;padding-top:0;margin-top:8px}
+.pm-sec{font-size:13px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--rs-muted);margin:12px 0 6px}
+.pm-items{list-style:none;margin:0;padding:0;display:flex;flex-direction:column}
+.pm-item{padding:9px 2px;border-bottom:1px solid var(--rs-line);font-size:14.5px;line-height:1.55;overflow-wrap:anywhere}
+.pm-item:last-child{border-bottom:0}
+.pm-lead{font-weight:700}
+.pm-chips{display:flex;flex-wrap:wrap;gap:4px 14px;margin:3px 0}
+.pm-chip{font-size:14px}
+.pm-note{display:inline-block;margin-top:3px;font-size:13px;padding:1px 9px;border-radius:20px;border:1px solid var(--rs-line);color:var(--rs-muted)}
+.pm-extra{display:flex;flex-direction:column;gap:6px;align-items:flex-start;margin-top:10px}
+.pm-rules,.pm-text{margin:6px 0 0;font-size:14.5px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
+.pm-raw{margin:8px 0 0;padding:12px;border:1px solid var(--rs-line);border-radius:10px;background:var(--rs-inset);font:13.5px/1.55 var(--k-mono,ui-monospace,Consolas,monospace);white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto}
+.pm-foot{font-size:13px}
+@container (max-width:560px){.pm-meta{grid-template-columns:1fr}.pm-meta dt{margin-top:6px}}
 .set-ladder{display:flex;align-items:stretch;flex-wrap:wrap;gap:4px;border:1px solid var(--rs-line);border-radius:16px;background:var(--rs-inset);padding:14px 10px}
 .set-step{flex:1 1 70px;display:flex;flex-direction:column;align-items:center;gap:6px;text-align:center}
 .set-step strong{font-size:28px;line-height:1;font-variant-numeric:tabular-nums}
@@ -70,7 +111,8 @@ export function createSystemPages(ctx) {
   const act = (...args) => ctx.act(...args);
   const setStatus = (...args) => ctx.setStatus(...args);
 
-  const promptSectionsOpen = new Set(['lines']); // "What the model gets": open sections
+  // «Что получает модель»: which blocks and which of their sections are open.
+  const promptSectionsOpen = new Set(['block:scene', 'block:knowledge', 'block:calendar', 'block:direction', 'block:chronicle']);
 
   function renderLorebooks() {
     const lorebooks = ctx.snapshot.lorebooks || {};
@@ -93,9 +135,21 @@ export function createSystemPages(ctx) {
         button('Подключить книгу карточки', 'btn primary', () => act('onLinkLorebook', { name })),
       ]));
     }
+    // Which of these the tavern really sends to the model: known once it has built a prompt in this chat.
+    const tavern = Array.isArray(lorebooks.tavern) ? new Set(lorebooks.tavern) : null;
+    const silent = tavern ? (lorebooks.selected || []).filter(name => !tavern.has(name)) : [];
+    if (silent.length) {
+      card.append(element('div', { className: 'item', role: 'alert', style: { margin: '8px 0', borderColor: 'var(--rs-danger)' } }, [
+        element('strong', { text: `Таверна не отправляет модели: ${silent.map(name => `«${name}»`).join(', ')}.` }),
+        element('p', { style: { margin: '6px 0 0' }, text: 'Кулисы эти книги читают, но в самой таверне они не подключены, поэтому в ответ модели из них не попадает ничего и суфлёру нечего отбирать. Подключи их в таверне: основной лорбук в карточке персонажа (глобус), дополнительные там же, либо лорбук чата.' }),
+      ]));
+    } else if (!tavern && (lorebooks.selected || []).length) {
+      card.append(element('p', { className: 'muted', text: 'Какие из этих книг таверна отправляет модели, станет видно после первого ответа в этом чате.' }));
+    }
     for (const name of lorebooks.selected || []) {
       const row = element('div', { className: 'item', style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', margin: '8px 0' } }, [
-        element('strong', { text: name }),
+        element('strong', { style: { flex: '1 1 auto' }, text: name }),
+        ...(tavern ? [element('span', { className: 'muted', style: { flex: '0 0 auto', fontSize: '12px' }, text: tavern.has(name) ? 'таверна отправляет модели' : '⚠ только Кулисы, модель не получает' })] : []),
       ]);
       const unlink = button('×', 'btn icon', () => act('onUnlinkLorebook', { name }), `Отвязать ${name}`);
       unlink.style.cssText = 'flex:0 0 auto;width:26px;height:26px;min-height:26px;padding:0;font-size:13px;line-height:1;border-radius:6px';
@@ -130,6 +184,7 @@ export function createSystemPages(ctx) {
     ['relations', 'Отношения', 'heart'],
     ['scene', 'Знания и сцена', 'stage'],
     ['chronicle', 'Хроника и сжатие', 'list'],
+    ['loregate', 'Суфлёр лорбуков', 'book'],
     ['prompt', 'Что получает модель', 'chat'],
     ['models', 'Модели и API', 'spark'],
     ['data', 'Данные', 'download'],
@@ -141,7 +196,9 @@ export function createSystemPages(ctx) {
 
   /** A row: label, optional "?" that unfolds a one-line hint, and the control on the right. */
   function settingRow(label, control, hint = '') {
-    const row = element('div', { className: 'set-row' }, [element('span', { className: 'set-label', text: label })]);
+    // A drop-down with long options gets a line of its own under the label, instead of squeezing the label into a column.
+    const wide = control?.classList?.contains('set-select');
+    const row = element('div', { className: `set-row${wide ? ' wide' : ''}` }, [element('span', { className: 'set-label', text: label })]);
     if (hint) {
       const note = element('p', { className: 'set-hint', text: hint, hidden: true });
       const help = button('?', 'set-help', () => { note.hidden = !note.hidden; help.setAttribute('aria-expanded', String(!note.hidden)); }, `Подробнее: ${label}`);
@@ -297,6 +354,7 @@ export function createSystemPages(ctx) {
       list(
         switchRow('Летописец сцены', 'trackWorld', 'Время (24 ч), место, одежда, состояние и вещи. Закреплённое вручную не меняется.', current),
         switchRow('Сцена в промпт', 'sendScene', 'Только тех, кто на сцене.', current),
+        switchRow('Погода в промпт', 'sendWeather', 'Одна строка в блоке сцены: какая погода на улице. Задаётся в «Мир → Погода».', current),
         switchRow('Календарь в промпт', 'sendCalendar', 'Дата истории, события сегодняшнего дня и то, что скоро. Нужна дата истории в «Мир → Календарь».', current),
         switchRow('Сообщать, если одежда не влезла', 'looksWarning', 'Всплывающее сообщение, когда описания из гардероба у кого-то на сцене перестают влезать в объём сцены: один раз, и снова — только если они влезли, а потом опять нет.', current),
         settingRow('Объём сцены, символов', numberInput('Объём сцены', current.scenePromptCharacters ?? 1500, 300, 6000, value => change({ scenePromptCharacters: value })), 'Не влезает — первыми уходят описание места и мелкие вещи.'),
@@ -306,6 +364,69 @@ export function createSystemPages(ctx) {
         ...(ctx.snapshot.looksFit?.need !== undefined ? [element('p', { className: 'ku-fit dropped ku-small', text: `Описания из гардероба сейчас не влезают. ${ctx.needText?.(ctx.snapshot.looksFit) ?? ''} Примерно 1 токен на 3–4 символа русского текста.` })] : []),
         settingRow('Вещи в тень через, сообщений', numberInput('Вещи в тень через', current.itemsDormantAfter ?? 40, 0, 500, value => change({ itemsDormantAfter: value })), 'Обычная вещь, о которой столько сообщений ни слова, хранится, но не отправляется модели. Упомянут снова — вернётся. 0 — никогда.'),
       ),
+    ];
+  }
+
+  /** «Суфлёр лорбуков»: rules per section of a character's sheet, the scene mode and the last decision. */
+  function sectionLoreGate(current) {
+    const gate = current.loreGate ?? { enabled: false, visualEvery: 6, sections: {} };
+    const patch = value => change({ loreGate: value });
+    const select = (label, options, value, onPick) => {
+      const node = element('select', { className: 'set-select', 'aria-label': label }, Object.entries(options).map(([id, text]) => element('option', { value: id, text, selected: id === value })));
+      node.addEventListener('change', () => onPick(node.value));
+      return node;
+    };
+    const mode = ctx.snapshot.world?.clock?.mode ?? 'calm';
+    const modes = element('span', { className: 'set-seg', role: 'group', 'aria-label': 'Тип сцены' }, Object.entries(SCENE_MODE_LABELS).map(([id, text]) => {
+      const node = button(text, id === mode ? 'btn primary' : 'btn', () => act('onSetClock', { mode: id }, 'scene-mode'), 'Поставить тип сцены вручную');
+      node.setAttribute('aria-pressed', String(id === mode));
+      return node;
+    }));
+    const rules = Object.entries(GATE_SECTIONS).map(([id, section]) => element('div', { className: 'set-item' }, [
+      element('div', { className: 'set-row gate-rule' }, [
+        element('span', { className: 'set-label', text: section.label }),
+        select(`${section.label}: когда отправлять`, GATE_WHEN, gate.sections?.[id]?.when, value => patch({ sections: { [id]: { when: value } } })),
+        select(`${section.label}: если не на сцене`, GATE_ABSENT, gate.sections?.[id]?.absent, value => patch({ sections: { [id]: { absent: value } } })),
+      ]),
+    ]));
+    const report = ctx.snapshot.loreGateReport;
+    const gateRest = data => data.people.filter(person => !person.present && !person.named && !person.parts.some(part => part.action === 'force')).map(person => person.name);
+    const sent = Array.isArray(ctx.snapshot.lorebooks?.tavern) ? new Set(ctx.snapshot.lorebooks.tavern) : null;
+    const gateSilent = sent ? (ctx.snapshot.lorebooks?.selected || []).filter(name => !sent.has(name)) : [];
+    const reportBody = !gate.enabled ? element('p', { className: 'muted', text: 'Суфлёр выключен: записи отбирает только таверна, по ключам.' })
+      : !report ? element('p', { className: 'muted', text: 'Пока не было ни одного ответа с включённым суфлёром.' })
+        : !report.people.length && !report.world ? element('p', { className: 'muted', text: `В последний раз суфлёр ничего не тронул: никого из известных Кулисам персонажей нет на сцене или в лорбуках, которые отправляет таверна, нет записей вида «[ Имя ] - Раздел».${gateSilent.length ? ` Таверна сейчас не отправляет: ${gateSilent.map(name => `«${name}»`).join(', ')} — см. «Система → Лорбуки».` : ''}` })
+          : element('div', { className: 'set-list' }, [
+            element('p', { className: 'set-hint', text: `Сцена: ${SCENE_MODE_LABELS[report.mode] ?? report.mode}. Отправлено по правилам: ${report.forced}, придержано: ${report.dropped} (${report.savedCharacters.toLocaleString('ru-RU')} зн.), оставлено ключам: ${report.kept}.` }),
+            ...(report.world ? [element('p', { className: 'set-hint', text: `Записи мира: летописец выбрал ${report.world.picked.length ? report.world.picked.map(title => `«${title}»`).join(', ') : 'ничего'}. Отправлено ${report.world.forced}, придержано ${report.world.dropped} (${report.world.savedCharacters.toLocaleString('ru-RU')} зн.), по ключам из твоего поста оставлено ${report.world.kept}.` })]
+              : gate.world === 'chronicler' ? [element('p', { className: 'set-hint', text: 'Записи мира пока не придерживаются: летописец ещё не называл нужные. Это начнётся после следующего ответа.' })] : []),
+            ...report.people.filter(person => person.present || person.named || person.parts.some(part => part.action === 'force')).map(person => element('div', { className: 'set-item' }, [element('div', { className: 'set-row gate-person' }, [
+              element('span', { className: 'set-label', text: `${person.name}${person.present ? '' : person.named ? ' (назван в постах)' : ' (не на сцене)'}` }),
+              element('span', { className: 'set-pills' }, person.parts.map(part => element('span', {
+                className: `set-pill${part.action === 'drop' ? ' gate-off' : ''}`,
+                title: part.action === 'force' ? 'Отправлено по правилу' : part.action === 'drop' ? `Придержано: ${part.why}` : 'Оставлено ключам таверны',
+                text: `${part.label.split(' ')[0]}${part.action === 'drop' ? ` — ${part.why}` : part.action === 'keep' ? ' — по ключам' : ''}`,
+              }))),
+            ])])),
+            // Everyone else: one line, so the list does not look as if they were brought into the scene.
+            ...(gateRest(report).length ? [element('p', { className: 'set-hint', text: `Не в сцене, анкеты придержаны (Basic Info — по ключам, если так стоит в правилах): ${gateRest(report).join(', ')}.` })] : []),
+          ]);
+    return [
+      heading('Суфлёр лорбуков', 'Какие разделы анкеты персонажа уходят модели, решают не ключевые слова, а сцена: кто в ней и что происходит.'),
+      list(
+        settingRow('Суфлёр включён', toggle('Суфлёр включён', gate.enabled, value => patch({ enabled: value })),
+          'Работает с записями, названными «[ Имя ] - Раздел», о персонажах, которых знают Кулисы. Остальные записи, константы и лорбук персоны не трогает. Если Кулисы не знают, кто на сцене, не трогает ничего.'),
+        settingRow('Сцена сейчас', modes, 'Летописец сцены ставит тип сам после каждого ответа. Здесь можно поправить вручную: от него зависят правила «только в бою» и «только в близости».'),
+        settingRow('«Раз в N ходов»: N', numberInput('Раз в N ходов', gate.visualEvery ?? 6, 1, 50, value => patch({ visualEvery: value })), 'Для правила «при выходе на сцену и раз в N ходов». Ход — один твой пост.'),
+        settingRow('Записи мира и места', select('Записи мира и места', GATE_WORLD, gate.world ?? 'chronicler', value => patch({ world: value })),
+          'Всё, что в лорбуке не анкета персонажа: комнаты, правила, предметы, фракции. После каждого ответа летописец называет, какие из них нужны следующему. Названные идут всегда, остальные придерживаются, если в твоём свежем посте нет их ключевых слов. Пока летописец ни разу не ответил, ничего не придерживается.'),
+        settingRow('Назван в постах, но не на сцене', select('Назван в постах, но не на сцене', GATE_NAMED, gate.named ?? 'core', value => patch({ named: value })),
+          'Кто действует рядом, хотя в сцене не числится: назван в твоём свежем посте или в нескольких предложениях последнего ответа (голос за дверью, звонок). Одно упоминание мимоходом не считается.'),
+      ),
+      element('div', { className: 'set-group', text: 'Разделы: когда отправлять того, кто на сцене · что делать, если его нет на сцене' }),
+      list(...rules),
+      element('div', { className: 'set-group', text: 'Что суфлёр решил в последний раз' }),
+      reportBody,
     ];
   }
 
@@ -363,23 +484,6 @@ export function createSystemPages(ctx) {
     ];
   }
 
-  function sectionPrompt() {
-    const snap = ctx.snapshot;
-    const preview = element('div', { className: 'card' }, [element('h3', { text: 'Отношения и знания' })]);
-    preview.append(element('p', { className: 'muted', style: { fontSize: '11px' }, text: `Отношения ${tokens(snap.promptTokens)}, знания ${tokens(snap.knowledgeTokens)} токенов. Пусто — проверьте, что связь не исключена персоной и значения не нулевые.` }));
-    preview.append(...renderPromptSections([snap.promptPreview || '', knowledgeLines(snap.knowledgePreview)].filter(Boolean).join('\n')));
-    const block = (title, text, count) => {
-      const details = element('details', { className: 'fold', style: { marginTop: '12px' } }, [element('summary', {}, [title, element('span', { className: 'muted', text: ` · ${tokens(count)} токенов` })])]);
-      details.append(element('div', { className: 'fold-body' }, [element('pre', { className: 'prompt-lines', text: text || 'Пока пусто.' })]));
-      return details;
-    };
-    return [
-      heading('Что получает модель', 'Всё, что Кулисы добавят к следующему ответу.'),
-      preview,
-      block('Сцена', snap.scenePreview, snap.sceneTokens),
-    ];
-  }
-
   function renderSettings() {
     const current = ctx.snapshot.settings || {};
     const nav = element('nav', { className: 'set-nav', 'aria-label': 'Разделы настроек' }, SETTINGS_SECTIONS.map(([id, label, iconName]) => {
@@ -393,6 +497,7 @@ export function createSystemPages(ctx) {
       case 'relations': body = sectionRelations(current); break;
       case 'scene': body = sectionScene(current); break;
       case 'chronicle': body = sectionChronicle(); break;
+      case 'loregate': body = sectionLoreGate(current); break;
       case 'prompt': body = sectionPrompt(); break;
       case 'models': body = [heading('Модели и API'), renderAuxApi(), renderVisionApi(), renderEmbeddings()]; break;
       case 'data': body = [heading('Данные'), renderImageStorage(), renderHoraeImport(), renderDataTransfer()]; break;
@@ -402,42 +507,125 @@ export function createSystemPages(ctx) {
     return element('div', { className: 'set-shell' }, [nav, element('div', { className: 'set-body' }, body)]);
   }
 
-  /** The injection split by kind, each section foldable with a counter, so nothing has to be searched for. */
-  /** Data lines of the knowledge block (its header and rules are the same every time). */
-  function knowledgeLines(block) {
-    const text = String(block ?? '');
-    const start = text.indexOf('\n');
-    const end = text.indexOf('\n\nRules:');
-    return start >= 0 && end > start ? text.slice(start + 1, end) : '';
+  // ---- Что получает модель -----------------------------------------------------
+
+  const STATE_TEXT = { on: 'уходит модели', empty: 'пока пусто', off: 'выключено' };
+
+  /** One item of a block in words: a bold lead, the text, a small note, and — for feelings — labelled numbers. */
+  function promptItem(item) {
+    const row = element('li', { className: 'pm-item' });
+    if (item.head) row.append(element('div', { className: 'pm-lead', text: item.head }));
+    if (item.chips?.length) {
+      row.append(element('div', { className: 'pm-chips' }, item.chips.map(chip => element('span', { className: 'pm-chip', title: chip.hint || '' }, [
+        element('b', { text: `${chip.label} ${chip.value}` }),
+        chip.hint ? element('span', { className: 'muted', text: ` — ${chip.hint}` }) : null,
+      ].filter(Boolean)))));
+    }
+    if (item.text) row.append(element('div', { className: 'pm-text', text: item.text }));
+    if (item.note) row.append(element('span', { className: 'pm-note', text: item.note }));
+    return row;
   }
 
-  function renderPromptSections(text) {
-    const sections = [
-      ['scene', 'Сцена и знакомства', line => /^(scene:|strangers\[|seen\[|dead\[)/.test(line)],
-      ['knowledge', 'Кто чего не знает', line => /^(unknown|heard|secret)\[/.test(line)],
-      ['rules', 'Правила: треугольники', line => line.startsWith('triangle ')],
-      ['memories', 'Воспоминания', line => /^(shared|secret)-memories/.test(line)],
-      ['tensions', 'Напряжения', line => /^(shared|secret)-tensions/.test(line)],
-      ['headcanons', 'Хедканоны', line => line.startsWith('headcanon[')],
-      ['lines', 'Линии и шкалы', () => true],
-    ];
-    const lines = text.split('\n').map(line => line.trim()).filter(Boolean);
-    const groups = new Map(sections.map(([key]) => [key, []]));
-    for (const line of lines) groups.get(sections.find(([, , test]) => test(line))[0]).push(line);
-    const order = ['scene', 'knowledge', 'lines', 'memories', 'tensions', 'headcanons', 'rules'];
-    const nodes = order.map(key => {
-      const [, title] = sections.find(([id]) => id === key);
-      const items = groups.get(key);
-      const details = element('details', { className: 'prompt-section' });
+  function promptBlock(block, index, total) {
+    const open = key => {
+      const details = element('details', { className: 'pm-fold' });
       details.open = promptSectionsOpen.has(key);
       details.addEventListener('toggle', () => { if (details.open) promptSectionsOpen.add(key); else promptSectionsOpen.delete(key); });
-      details.append(element('summary', { text: `${title} · ${items.length}` }));
-      if (key === 'headcanons') details.append(element('p', { className: 'muted', style: { fontSize: '11px', margin: '4px 0' }, text: headcanonStatusText() }), button('Подобрать к текущей сцене', 'btn', () => act('onRefreshScene', {}, 'scene-refresh')));
-      details.append(element('pre', { className: 'prompt-lines', text: items.join('\n') || '—' }));
       return details;
-    });
-    if (!lines.length) nodes.unshift(element('p', { className: 'muted', text: text || 'Пока пусто.' }));
-    return nodes;
+    };
+    const meta = [['Что это', block.what], ['Откуда берётся', block.source], ['Где в запросе', block.where], ['Как выключить', block.off]];
+    const metaList = element('dl', { className: 'pm-meta' });
+    for (const [label, value] of meta) metaList.append(element('dt', { text: label }), element('dd', { text: value }));
+    if (block.why) metaList.append(element('dt', { text: 'Сейчас' }), element('dd', { text: block.why }));
+    const links = element('div', { className: 'pm-links' }, [
+      ...(block.tab ? [button(`Открыть «${block.tab[1]}»`, 'set-link', () => ctx.setTab(block.tab[0]))] : []),
+      button('Открыть настройки', 'set-link', () => { settingsSection = block.section; ctx.render(); }),
+    ]);
+    const card = element('section', { className: `pm-block ${block.state}` }, [
+      element('header', { className: 'pm-head' }, [
+        element('span', { className: 'pm-index', text: String(index + 1), title: 'Порядок в запросе' }),
+        element('h4', { className: 'pm-title', text: block.title }),
+        element('span', { className: `pm-pill ${block.state}`, text: STATE_TEXT[block.state] }),
+        element('span', { className: 'pm-tokens', text: block.state === 'on' ? `${tokens(block.tokens)} токенов` : '' }),
+      ]),
+      metaList,
+      links,
+    ]);
+    if (block.state !== 'on') return card;
+    const view = readable(block.id, block.text);
+    const body = open(`block:${block.id}`);
+    const count = view.sections.reduce((sum, section) => sum + section.items.length, 0);
+    body.append(element('summary', { text: `Что именно уйдёт · ${count}` }));
+    for (const section of view.sections) {
+      const key = `${block.id}:${section.title}`;
+      const group = view.sections.length > 1 ? open(key) : null;
+      const itemsList = element('ul', { className: 'pm-items' }, section.items.map(promptItem));
+      if (group) {
+        if (section.items.length <= 6 && !promptSectionsOpen.has(key) && !promptSectionsOpen.has(`closed:${key}`)) { group.open = true; promptSectionsOpen.add(key); }
+        group.append(element('summary', { className: 'pm-sec', text: `${section.title} · ${section.items.length}` }), itemsList);
+        body.append(group);
+      } else {
+        body.append(element('div', { className: 'pm-sec', text: `${section.title} · ${section.items.length}` }), itemsList);
+      }
+    }
+    if (block.id === 'relationships') {
+      body.append(element('div', { className: 'pm-extra' }, [
+        element('p', { className: 'muted', text: headcanonStatusText() }),
+        button('Подобрать хедканоны к текущей сцене', 'btn', () => act('onRefreshScene', {}, 'scene-refresh')),
+      ]));
+    }
+    if (view.rules) {
+      const rules = open(`rules:${block.id}`);
+      rules.append(element('summary', { text: 'Правила для модели: одни и те же каждый раз' }), element('p', { className: 'pm-rules', text: view.rules }));
+      body.append(rules);
+    }
+    const raw = open(`raw:${block.id}`);
+    raw.append(element('summary', { text: 'Как видит модель: точный текст' }), element('pre', { className: 'pm-raw', text: block.text }));
+    body.append(raw);
+    card.append(body);
+    return card;
+  }
+
+  /** What the lore gate did last time: the lorebooks are the biggest part of a request and are not Kulisy's own block. */
+  function promptLoreNote() {
+    const gate = ctx.snapshot.settings?.loreGate ?? {};
+    const report = ctx.snapshot.loreGateReport;
+    const text = !gate.enabled
+      ? 'Суфлёр выключен: записи лорбуков отбирает только таверна, по ключевым словам. Это обычно самая тяжёлая часть запроса, и в неё Кулисы не вмешиваются.'
+      : !report ? 'Суфлёр включён, но ответов с ним ещё не было.'
+        : `Суфлёр в последний раз: отправлено по правилам ${report.forced} записей, придержано ${report.dropped} (${(report.savedCharacters ?? 0).toLocaleString('ru-RU')} знаков не ушло), остальное оставлено ключам таверны (${report.kept}).`;
+    return element('section', { className: 'pm-block pm-lore' }, [
+      element('header', { className: 'pm-head' }, [element('h4', { className: 'pm-title', text: 'Лорбуки: анкеты персонажей и мир' }), element('span', { className: `pm-pill ${gate.enabled ? 'on' : 'empty'}`, text: gate.enabled ? 'суфлёр работает' : 'суфлёр выключен' })]),
+      element('p', { className: 'pm-text', text }),
+      element('p', { className: 'muted', text: 'Сами записи в запрос кладёт таверна, а не Кулисы. Какие книги она отправляет, видно в «Подключённые лорбуки», а что сработало в каждом ответе, в окне «Что сработало из лорбуков» Пудреницы.' }),
+      element('div', { className: 'pm-links' }, [button('Настройки суфлёра', 'set-link', () => { settingsSection = 'loregate'; ctx.render(); })]),
+    ]);
+  }
+
+  function sectionPrompt() {
+    const blocks = ctx.snapshot.promptBlocks ?? [];
+    const sent = blocks.filter(block => block.state === 'on');
+    const total = sent.reduce((sum, block) => sum + block.tokens, 0);
+    const bar = element('div', { className: 'pm-bar', role: 'img', 'aria-label': 'Доли блоков в общем объёме' }, sent.filter(block => block.tokens > 0).map((block, index) => {
+      const part = element('i', { title: `${block.title}: ${tokens(block.tokens)} токенов` });
+      part.style.flex = `${block.tokens} 1 0`;
+      part.style.background = `color-mix(in srgb, var(--rs-accent) ${22 + index * 13}%, var(--rs-inset))`;
+      return part;
+    }));
+    const legend = element('div', { className: 'pm-legend' }, sent.filter(block => block.tokens > 0).map((block, index) => {
+      const dot = element('i', { className: 'pm-dot' });
+      dot.style.background = `color-mix(in srgb, var(--rs-accent) ${22 + index * 13}%, var(--rs-inset))`;
+      return element('span', {}, [dot, `${block.title.split(':')[0]} ${tokens(block.tokens)}`]);
+    }));
+    return [
+      heading('Что получает модель', 'Всё, что Кулисы добавят к следующему ответу. Блоки идут в том порядке, в каком модель их читает; у каждого написано, что это и откуда. Раскрой «Что именно уйдёт», чтобы увидеть содержимое словами.'),
+      element('div', { className: 'set-total' }, [element('strong', { text: `${tokens(total)} токенов` }), element('span', { className: 'muted', text: `в ${sent.length} блоках от Кулис` })]),
+      bar,
+      legend,
+      ...blocks.map((block, index) => promptBlock(block, index, blocks.length)),
+      promptLoreNote(),
+      element('p', { className: 'muted pm-foot', text: 'Не входят сюда: описание персонажа, твой пресет, история чата и сама таверна. Их Кулисы не меняют.' }),
+    ];
   }
 
   function headcanonStatusText() {
@@ -906,5 +1094,5 @@ export function createSystemPages(ctx) {
     }, 0);
   }
 
-  return { openSettingsSection, renderLorebooks, renderJournal, renderSettings, renderPromptSections, headcanonStatusText, renderEmbeddings, renderAuxApi, renderDiagnostics, renderDataTransfer, renderHoraeImport };
+  return { openSettingsSection, renderLorebooks, renderJournal, renderSettings, headcanonStatusText, renderEmbeddings, renderAuxApi, renderDiagnostics, renderDataTransfer, renderHoraeImport };
 }
