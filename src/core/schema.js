@@ -30,6 +30,7 @@ export const DEFAULT_SCALES = Object.freeze([
   Object.freeze({ id: 'dependency', label: 'Зависимость', default: 0 }),
   Object.freeze({ id: 'approval', label: 'Одобрение', default: 0 }),
   Object.freeze({ id: 'guilt', label: 'Вина', default: 0 }),
+  Object.freeze({ id: 'anxiety', label: 'Тревога', default: 0 }),
 ]);
 
 /** Clamp a relationship scale value to the engine range. */

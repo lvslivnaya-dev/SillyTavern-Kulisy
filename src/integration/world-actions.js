@@ -4,7 +4,7 @@
  * journaled manual operation, so it shows in the history and survives swipes of
  * other replies; whatever the user writes by hand can be locked against the chronicler.
  */
-import { WEATHER_KINDS, WEATHER_KIND_IDS, createOperation, dropOperation, parseTime, uniqueId } from '../core/index.js';
+import { WEATHER_KINDS, WEATHER_KIND_IDS, cleanShifts, closingShifts, createOperation, dropOperation, parseTime, questId, questsOf, uniqueId } from '../core/index.js';
 
 function meta(reason) {
   return { transactionId: uniqueId('manual'), reason, timestamp: new Date().toISOString() };
@@ -66,6 +66,17 @@ export function createWorldCallbacks(deps) {
       if (clear) return run('weather.set', { clear: true }, 'Погода: по прогнозу');
       if (!WEATHER_KIND_IDS.includes(kind)) throw new Error('Не знаю такой погоды.');
       return run('weather.set', { kind, temp: temp === '' ? null : temp, text, lock: Boolean(lock) }, `Погода: ${WEATHER_KINDS[kind].label.toLowerCase()}${lock ? ' (держать)' : ''}`);
+    },
+    /** The heat of the scene by hand: { value } or { delta }, { lock }, { clear }. */
+    onSetHeat: ({ value, delta, lock, clear, why }) => {
+      if (clear) return run('heat.set', { clear: true }, 'Накал: по ответам');
+      const payload = {};
+      if (value != null) payload.value = Number(value);
+      else if (delta != null) payload.delta = Number(delta);
+      if (lock !== undefined) payload.lock = Boolean(lock);
+      if (why !== undefined) payload.why = why;
+      if (!Object.keys(payload).length) return null;
+      return run('heat.set', payload, `Накал: ${value != null ? value : `${Number(delta) > 0 ? '+' : ''}${delta ?? ''}`}${lock ? ' (держать)' : ''}`);
     },
     /** A place card of this chat, or free text (a matching card is picked up by name). */
     onSetSceneLocation: ({ locationId, location }) => {
@@ -136,6 +147,31 @@ export function createWorldCallbacks(deps) {
     },
     onUpdateItem: ({ itemId, changes }) => run('item.update', { itemId, changes }, 'Ручная правка вещи'),
     onRemoveItem: ({ itemId }) => run('item.remove', { itemId }, 'Вещь удалена'),
+
+    // ---- Quests (Мир → Квесты) ------------------------------------------------
+    /** dueIn: days from today (the story day), dueDay: the day itself; reward/penalty: { text, shifts }. */
+    onAddQuest: ({ name, text = '', steps = [], secret = false, knownByIds = [], participantIds = [], dueDay = 0, dueIn = 0, reward, penalty }) => {
+      if (!String(name ?? '').trim()) throw new Error('Назовите квест.');
+      const today = getState().world?.clock?.day || 0;
+      const due = Number(dueDay) || (Number(dueIn) > 0 && today ? today + Math.round(Number(dueIn)) : 0);
+      return run('quest.add', { item: { id: questId(), name, text, steps, secret, knownByIds, participantIds, ...(due ? { dueDay: due } : {}), ...(reward ? { reward } : {}), ...(penalty ? { penalty } : {}) } }, `Новый квест: ${name}`);
+    },
+    onUpdateQuest: ({ questId: id, changes }) => run('quest.update', { questId: id, changes }, 'Ручная правка квеста'),
+    onQuestStep: ({ questId: id, stepId, done }) => run('quest.step', { questId: id, stepId, done }, 'Шаг квеста отмечен'),
+    onRemoveQuest: ({ questId: id }) => run('quest.remove', { questId: id }, 'Квест удалён'),
+    /** Ends a quest: status done/failed, a note, and (unless apply is false) the shifts it promised to the lines. */
+    onCloseQuest: ({ questId: id, status, outcome = '', apply = true }) => {
+      const state = getState();
+      const quest = questsOf(state).find(item => item.id === id);
+      if (!quest) throw new Error('Квест не найден.');
+      if (status !== 'done' && status !== 'failed') throw new Error('Квест закрывается как выполненный или проваленный.');
+      const label = status === 'done' ? 'выполнен' : 'провален';
+      const operations = [createOperation('quest.update', { questId: id, changes: { status, outcome } }, meta(`Квест «${quest.name}» ${label}`))];
+      if (apply) for (const shift of cleanShifts(closingShifts(quest, status), state)) {
+        operations.push(createOperation('scale.delta', { relationshipId: shift.relationshipId, scaleId: shift.scaleId, value: shift.value }, meta(`Квест «${quest.name}» ${label}: сдвиг отношений`)));
+      }
+      return commitOperations(operations);
+    },
 
     // ---- Place cards of this chat -------------------------------------------
     onAddChatLocation: ({ name, parentId = '', traits = [] }) => {

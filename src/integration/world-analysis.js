@@ -16,7 +16,7 @@
  * Order matters and is kept by applyAnalysisResult: place → clock → scene (who came
  * in) → the rest, so "three days later Rindo walks in" lets Rindo change clothes.
  */
-import { SCENE_MODES, WEATHER_KINDS, WEATHER_KIND_IDS, formatTime, parseTime, presentIds, uniqueId } from '../core/index.js';
+import { SCENE_MODES, heatFromReply, WEATHER_KINDS, WEATHER_KIND_IDS, formatTime, parseTime, presentIds, uniqueId } from '../core/index.js';
 import { mentionedEntities } from './headcanon-retrieval.js';
 import { effectiveLocation, findInLibrary, linkPayloads, linkedCards } from './location-links.js';
 import { findItemInLibrary, itemFromLibrary, linkedItems } from './item-links.js';
@@ -92,6 +92,7 @@ export function buildWorldBlock(state, text, library = null, wardrobe = null, sk
   const currentId = state.knowledge?.scene?.locationId ?? '';
   const lines = [
     'SCENE STATE TRACKING',
+    ...(state.world?.heat ? [`Scene heat before this reply: ${state.world.heat.value}/100${state.world.heat.why ? ` (${state.world.heat.why})` : ''}${state.world.heat.lock ? ' [LOCKED by the user: do not report heat]' : ''}.`] : []),
     `Story time before this reply: ${[
       clock.day ? `day ${clock.day}` : 'day unknown',
       clock.time || 'time unknown',
@@ -131,20 +132,29 @@ export function buildWorldBlock(state, text, library = null, wardrobe = null, sk
       lines.push(`- ${item.id}: ${item.name}${item.locked ? ' [LOCKED]' : ''}${item.secret ? ' [SECRET]' : ''} | ${item.ownerId ? name(item.ownerId) : 'nobody'} | ${item.place || '—'} | ${item.importance}`);
     }
   }
+  const quests = (state.world?.quests ?? []).filter(quest => quest.status === 'active').slice(0, 8);
+  if (quests.length) {
+    lines.push('Quests in play (ID: title | step ID: step [done]):');
+    for (const quest of quests) {
+      lines.push(`- ${quest.id}: ${quest.name}${quest.text ? ` — ${quest.text}` : ''} | ${(quest.steps ?? []).map(step => `${step.id}: ${step.text}${step.done ? ' [done]' : ''}`).join('; ') || 'no steps'}`);
+    }
+  }
   return `\n${lines.join('\n').slice(0, 9000)}\nEND SCENE STATE TRACKING\n`;
 }
 
 /** Instructions appended to the analyzer's system prompt. */
-export const WORLD_INSTRUCTIONS = ` Also return "world": {"clock":{"time":"HH:MM","advanceDays":0,"label":"","flashback":false,"mode":"calm"},"weather":{"kind":"clear|cloudy|rain|storm|snow|fog|wind|heat","tempC":null,"text":""},"place":{"locationId":"listed ID or null","new":{"name":"short place","parentId":"listed ID or null","traits":["feature"]},"addTraits":[],"addNotes":[],"removeNotes":[]},"outfits":[{"entityId":"a","outfit":"full current outfit","cardIds":["listed wardrobe card IDs still worn"],"lookId":"listed look ID or null"}],"conditions":[{"entityId":"a","text":"short state","days":1}],"conditionsGone":[{"entityId":"a","conditionId":"listed ID"}],"features":[{"entityId":"a","text":"lasting look, Russian","kind":"scar"}],"featuresChanged":[{"entityId":"a","featureId":"listed ID","text":"the full new text"}],"featuresGone":[{"entityId":"a","featureId":"listed ID"}],"items":[{"itemId":"listed ID, omit for a new item","name":"short name","ownerId":"a or null","place":"where exactly","importance":"normal","secret":false}],"itemsGone":["listed ID"],"slips":[{"kind":"outfit","entityId":"a","quote":"words from the reply","note":"short Russian: what contradicts what"}]}.
+export const WORLD_INSTRUCTIONS = ` Also return "world": {"clock":{"time":"HH:MM","advanceDays":0,"label":"","flashback":false,"mode":"calm"},"weather":{"kind":"clear|cloudy|rain|storm|snow|fog|wind|heat","tempC":null,"text":""},"heat":{"level":0,"why":""},"place":{"locationId":"listed ID or null","new":{"name":"short place","parentId":"listed ID or null","traits":["feature"]},"addTraits":[],"addNotes":[],"removeNotes":[]},"outfits":[{"entityId":"a","outfit":"full current outfit","cardIds":["listed wardrobe card IDs still worn"],"lookId":"listed look ID or null"}],"conditions":[{"entityId":"a","text":"short state","days":1}],"conditionsGone":[{"entityId":"a","conditionId":"listed ID"}],"features":[{"entityId":"a","text":"lasting look, Russian","kind":"scar"}],"featuresChanged":[{"entityId":"a","featureId":"listed ID","text":"the full new text"}],"featuresGone":[{"entityId":"a","featureId":"listed ID"}],"items":[{"itemId":"listed ID, omit for a new item","name":"short name","ownerId":"a or null","place":"where exactly","importance":"normal","secret":false}],"itemsGone":["listed ID"],"slips":[{"kind":"outfit","entityId":"a","quote":"words from the reply","note":"short Russian: what contradicts what"}],"quests":{"new":[{"name":"short Russian title","text":"one Russian sentence","steps":["step"]}],"steps":[{"questId":"listed ID","stepId":"listed step ID"}],"ended":[{"questId":"listed ID","status":"done","note":"short Russian"}]}}.
 SCENE STATE RULES:
 - clock.time: story time at the END of this reply, 24-hour HH:MM. Estimate from cues (dawn, lunch, "after midnight", how long things take) and keep it consistent with the previous time; omit when nothing suggests a time. advanceDays: whole days this reply skips ("three days later" = 3; crossing midnight into the next day = 1); 0 otherwise. label: weekday or date ONLY if the text states it. flashback: true only while the reply narrates the past, false when it returns to the present. mode: what the scene is at the END of this reply — "fight" when a physical fight or battle is under way or breaking out, "intim" when sexual intimacy is under way or clearly starting (undressing each other, heavy petting, sex), otherwise "calm". Always give it.
 - weather: the weather OUTDOORS at the END of this reply, ONLY when the reply states or clearly shows it (rain on the window, snow, a hot sun, someone shivering from cold, wet hair from rain). kind is one of the listed words; tempC a number only if stated or obvious, otherwise null; text a few Russian words about how it looks («моросит, лужи»). Omit "weather" when the reply says nothing about it, and during a flashback.
+- heat: how charged the WHOLE scene is at the END of this reply, 0..100 (0 calm; 20 a little tension; 40 pressure building; 60 high, on the edge; 80+ at the limit: a fight, a threat, a breaking point, the peak of arousal). Judge it against the listed previous heat and the story: it rises with what the reply shows (an argument, danger, a threat, escalating desire) and falls ONLY for a reason on page (a pause, a retreat, an apology, relief, time passing, the scene moving to something calm), never just by itself; a single beat rarely drops it by more than 20. why: a few Russian words. Omit "heat" when nothing changed, and during a flashback.
 - place.locationId: the listed card where the scene is at the END of the reply. A place that is not listed goes to "new" (a few Russian words; parentId when it is inside a listed place) with locationId null. addTraits: permanent physical features shown for the first time (layout, furniture, smell) — not people, not weather. addNotes: temporary changes of the place (a broken window, lit candles); removeNotes: exact listed note text that is no longer true. Omit "place" when the place is unclear.
 - outfits: ONLY when clothing visibly changes or is described for the first time: the FULL current outfit in Russian, not the difference. Never for [LOCKED]. Someone off stage keeps their clothes. cardIds: of the listed "wardrobe cards on", the ones still worn after the change (omit when none are listed). lookId: a listed saved look they put on as a whole ("надел форму Тосвы"), else null.
 - conditions: temporary physical states shown on page (wet, bloodied, bruise on the cheek, messy hair, drunk); days = how many story days it plausibly lasts. conditionsGone: a listed condition the reply shows ending (washed, dried, healed).
 - features: LASTING looks that appear in the story or are revealed for the first time and stay — a scar, a tattoo, a piercing, dyed or cut hair, coloured lenses, a crooked nose after a break; kind: scar|tattoo|piercing|hair|eyes|body|other. Russian, where and what ("шрам через левую бровь"). Not clothes, not make-up, not a passing state (that is a condition), not what the character card already says unless it changed. When a listed condition leaves a lasting mark (the cut healed into a scar), add the feature and put the condition into conditionsGone. featuresChanged: a listed lasting look that changes or gets a new detail (the hair dyed again, we learn where the scar is from) — the FULL new text, the old detail kept when still true. Never for [LOCKED]. featuresGone: only when it is truly gone (a tattoo removed).
 - items: only story-relevant objects that appear, change hands, are hidden or moved — a weapon, a letter, a gift, keys, money in an envelope. Not furniture, not food or drink used at once, not a cigarette, a napkin, a cup or anything else used once and forgotten, not clothing. When in doubt, leave it out. ownerId: who has it now (null = lying somewhere, then "place" says where). importance: "key" plot-critical, "important" meaningful, "normal" otherwise. secret: true when its holder hides it from the others. Never for [LOCKED]. itemsGone: used up, destroyed or lost for good.
 - slips: continuity errors of THIS reply against the listed state, shown on page with no in-story reason — kind "outfit" (wears something other than the listed outfit without changing; never for "may have changed"), "item" (uses or shows an item they do not have, or one listed as gone), "time" (contradicts the listed time without a skip), "place" (acts as if elsewhere), "looks" (describes someone against their listed lasting looks — the old hair colour, no scar where one is listed). quote: the exact words, at most 120 characters. A slip is never written into outfits/items. An empty array is the normal answer; never guess.
+- quests: only what the reply SHOWS. new: a task or goal that the characters have clearly taken up or been given in this reply (an agreement, an assignment, a search that starts) and that is not already in the listed quests; a mood, a wish or an idle plan is not a quest. steps: a listed step that the reply shows as DONE. ended: a listed quest that the reply shows as completed (done) or definitely lost, abandoned or made impossible (failed). All of this is only a proposal for the user to confirm: when in doubt, leave it out. Never for a flashback.
 Empty arrays and omitted parts are correct and frequent.`;
 
 const ID = value => (typeof value === 'string' && value.trim() ? value.trim().slice(0, 200) : null);
@@ -169,6 +179,9 @@ export function parseWorld(value) {
     };
     if (!Object.keys(clock).length) clock = null;
   }
+  const rawHeat = OBJECT(source.heat);
+  const heatLevelNumber = Number(rawHeat?.level);
+  const heat = rawHeat && Number.isFinite(heatLevelNumber) ? { level: Math.max(0, Math.min(100, Math.round(heatLevelNumber))), why: clip(rawHeat.why, 160) } : null;
   const rawWeather = OBJECT(source.weather);
   const tempC = rawWeather && rawWeather.tempC != null && rawWeather.tempC !== '' ? Math.round(Number(rawWeather.tempC)) : null;
   const weather = rawWeather && WEATHER_KIND_IDS.includes(rawWeather.kind)
@@ -230,7 +243,18 @@ export function parseWorld(value) {
   const slips = list('slips', WORLD_CHRONICLE_LIMITS.slips)
     .filter(item => SLIP_KINDS.has(item.kind) && clip(item.quote, 160))
     .map(item => ({ kind: item.kind, ...(ID(item.entityId) ? { entityId: ID(item.entityId) } : {}), quote: clip(item.quote, 160), note: clip(item.note, 200) }));
-  return { clock, weather, place, outfits, conditions, conditionsGone, features, featuresChanged, featuresGone, items, itemsGone, slips };
+  const rawQuests = OBJECT(source.quests) ?? {};
+  const quests = {
+    new: (Array.isArray(rawQuests.new) ? rawQuests.new : []).filter(OBJECT).slice(0, 2)
+      .filter(item => clip(item.name, 120))
+      .map(item => ({ name: clip(item.name, 120), text: clip(item.text, 400), steps: TEXTS(item.steps, 8, 200) })),
+    steps: (Array.isArray(rawQuests.steps) ? rawQuests.steps : []).filter(OBJECT).slice(0, 6)
+      .filter(item => ID(item.questId) && ID(item.stepId)).map(item => ({ questId: ID(item.questId), stepId: ID(item.stepId) })),
+    ended: (Array.isArray(rawQuests.ended) ? rawQuests.ended : []).filter(OBJECT).slice(0, 3)
+      .filter(item => ID(item.questId) && (item.status === 'done' || item.status === 'failed'))
+      .map(item => ({ questId: ID(item.questId), status: item.status, note: clip(item.note, 300) })),
+  };
+  return { clock, weather, heat, place, outfits, conditions, conditionsGone, features, featuresChanged, featuresGone, items, itemsGone, slips, quests };
 }
 
 /**
@@ -306,6 +330,46 @@ export function materializeWeather(world, api) {
     && (proposed.temp == null || proposed.temp === current.temp) && (!proposed.text || proposed.text === current.text)) return;
   const keepTemp = current && current.day === day && current.kind === proposed.kind ? current.temp : null;
   api.add('weather.set', { kind: proposed.kind, temp: proposed.temp ?? keepTemp, text: proposed.text }, `Погода: ${WEATHER_KINDS[proposed.kind].label.toLowerCase()}${proposed.text ? `, ${proposed.text}` : ''}`);
+}
+
+/** The heat of the scene the reply shows (core/heat.js): limited drops, a locked heat is the user's. */
+export function materializeHeat(world, api) {
+  const state = api.state();
+  const change = heatFromReply(state.world?.heat, world?.heat, { flashback: Boolean(state.world?.clock?.flashback), daysSkipped: Number(world?.clock?.advanceDays) || 0 });
+  if (!change) return;
+  api.add('heat.set', { value: change.value, why: change.why }, `Накал: ${change.value}${change.why ? `, ${change.why}` : ''}`);
+}
+
+/**
+ * What the reply shows about quests, as proposals for the plaque under it (nothing is written here):
+ * { id, kind: 'new', name, text, steps } | { id, kind: 'step', questId, stepId, questName, stepText }
+ * | { id, kind: 'end', questId, status, note, questName }. Unknown or closed quests, steps already done
+ * and a quest that already exists by name are dropped; a flashback proposes nothing.
+ */
+export function questProposals(world, api) {
+  const proposed = world?.quests;
+  const state = api.state();
+  if (!proposed || state.world?.clock?.flashback) return [];
+  const quests = state.world?.quests ?? [];
+  const active = id => quests.find(quest => quest.id === id && quest.status === 'active');
+  const lower = value => String(value ?? '').toLocaleLowerCase('ru-RU');
+  const hints = [];
+  for (const item of proposed.new ?? []) {
+    if (quests.some(quest => lower(quest.name) === lower(item.name))) continue;
+    hints.push({ id: `new:${lower(item.name)}`, kind: 'new', name: item.name, text: item.text, steps: item.steps });
+  }
+  for (const item of proposed.steps ?? []) {
+    const quest = active(item.questId);
+    const step = quest?.steps?.find(candidate => candidate.id === item.stepId);
+    if (!quest || !step || step.done) continue;
+    hints.push({ id: `step:${quest.id}:${step.id}`, kind: 'step', questId: quest.id, stepId: step.id, questName: quest.name, stepText: step.text });
+  }
+  for (const item of proposed.ended ?? []) {
+    const quest = active(item.questId);
+    if (!quest || hints.some(hint => hint.kind === 'end' && hint.questId === quest.id)) continue;
+    hints.push({ id: `end:${quest.id}`, kind: 'end', questId: quest.id, status: item.status, note: item.note, questName: quest.name });
+  }
+  return hints;
 }
 
 /** Step 4: features of the place, outfits, conditions, items. Locked entries are skipped. */

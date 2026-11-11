@@ -14,7 +14,7 @@ const SCALE_LABELS = Object.fromEntries(DEFAULT_SCALES.map(scale => [scale.id, s
  * Order = the order the model meets them: the chronicle opens the request, the blocks near the end of the chat
  * come next, the stage direction is the very last.
  */
-export const BLOCK_ORDER = Object.freeze(['chronicle', 'scene', 'calendar', 'knowledge', 'names', 'relationships', 'direction']);
+export const BLOCK_ORDER = Object.freeze(['chronicle', 'scene', 'calendar', 'knowledge', 'names', 'quests', 'relationships', 'direction']);
 
 const DESCRIPTIONS = Object.freeze({
   chronicle: {
@@ -60,6 +60,15 @@ const DESCRIPTIONS = Object.freeze({
     where: 'Рядом с последними сообщениями чата, перед самым последним.',
     off: 'Мир → Имена: переключатель «Отправлять имена», либо переключатель имени, либо «Выключить в этом чате».',
     tab: ['names', 'Имена'],
+    section: 'scene',
+  },
+  quests: {
+    title: 'Квесты: что в игре',
+    what: 'Нити истории, которые сейчас в игре: цель, текущий шаг, срок, кого касается. Модель подаёт шаги через сюжет, но не выполняет их за персону. Скрытые квесты идут, только когда на сцене кто-то из знающих.',
+    source: 'Страница «Квесты» (Мир → Квесты) и плитка «Квесты» в шторке. Новые квесты и выполненные шаги предлагает летописец плашкой под ответом.',
+    where: 'Рядом с последними сообщениями чата, перед самым последним.',
+    off: 'Отложить или закрыть квест; пока активных нет, блока нет.',
+    tab: ['quests', 'Квесты'],
     section: 'scene',
   },
   relationships: {
@@ -163,6 +172,8 @@ function readableScene(text) {
     }
     const plain = /^([a-z-]+):\s*(.*)$/.exec(line);
     if (plain && labels[plain[1]]) return { head: labels[plain[1]], text: plain[1] === 'time' ? humanTime(plain[2]) : plain[2] };
+    const heat = /^scene heat:\s*(.*)$/.exec(line);
+    if (heat) return { head: 'Накал сцены', text: heat[1] };
     return { head: '', text: line };
   });
   return { sections: [{ title: 'Состояние сцены', items }], rules };
@@ -274,7 +285,17 @@ function readableNames(text) {
   return { sections: [{ title: 'Как писать имена', items }], rules };
 }
 
-const READERS = { chronicle: readableChronicle, scene: readableScene, calendar: readableCalendar, knowledge: readableKnowledge, names: readableNames, relationships: readableRelationships, direction: readableDirection };
+function readableQuests(text) {
+  const { lines, rules } = unwrap(text);
+  const items = lines.map(line => {
+    const parts = line.replace(/^-\s*/, '').split(' | ');
+    const head = (parts.shift() ?? '').replace(/^quest\s*/, '').replace(/[«»]/g, '');
+    return { head, text: parts.join('; ') };
+  });
+  return { sections: [{ title: 'Что в игре', items }], rules };
+}
+
+const READERS = { quests: readableQuests, chronicle: readableChronicle, scene: readableScene, calendar: readableCalendar, knowledge: readableKnowledge, names: readableNames, relationships: readableRelationships, direction: readableDirection };
 
 /** { sections: [{ title, items: [{ head, text, note?, chips? }] }], rules } — the same text, in words. */
 export function readable(id, text) {

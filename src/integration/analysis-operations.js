@@ -2,7 +2,7 @@ import { applyOperation, createEntity, createOperation, isDead, relationshipId, 
 import { coupledDeltas } from './coupling.js';
 import { materializeKnowledge } from './knowledge-analysis.js';
 import { presentIds } from '../core/knowledge.js';
-import { confirmSlips, materializeClock, materializePlace, materializeSceneLocation, materializeWeather, materializeWorldRest } from './world-analysis.js';
+import { confirmSlips, materializeClock, materializePlace, materializeHeat, materializeSceneLocation, materializeWeather, materializeWorldRest, questProposals } from './world-analysis.js';
 
 function normalizedName(value) {
   return String(value ?? '').trim().toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
@@ -247,7 +247,7 @@ export function applyAnalysisResult(state, result, metadata = {}, acceptedNewCha
   const world = options.trackWorld === false ? null : result.world;
   const beforeWorld = next;
   const locationId = world ? materializePlace(world, api) : undefined;
-  if (world) { materializeClock(world, api); materializeWeather(world, api); }
+  if (world) { materializeClock(world, api); materializeWeather(world, api); materializeHeat(world, api); }
   let leaks = [];
   let deaths = [];
   let reveals = [];
@@ -260,5 +260,7 @@ export function applyAnalysisResult(state, result, metadata = {}, acceptedNewCha
   if (world) materializeWorldRest(world, api, locationId ?? next.knowledge?.scene?.locationId);
   if (options.triangleEcho !== false) triangleEcho(api, operations, options);
   const slips = world ? confirmSlips(world, api, beforeWorld) : [];
-  return { state: next, operations, headcanons, leaks, deaths, reveals, secrets, slips };
+  // Quests are only proposed: the plaque under the reply asks, nothing is written before.
+  const quests = world ? questProposals(world, api) : [];
+  return { state: next, operations, headcanons, leaks, deaths, reveals, secrets, slips, quests };
 }

@@ -237,9 +237,9 @@ test('"what the model gets": one card per block in request order, each saying wh
     const section = label => [...root.querySelectorAll('.set-nav button')].find(node => node.textContent === label);
     section('Что получает модель').click();
     const titles = [...root.querySelectorAll('.pm-block .pm-title')].map(node => node.textContent);
-    assert.deepEqual(titles.slice(0, 7), [
+    assert.deepEqual(titles.slice(0, 8), [
       'Хроника: что было раньше', 'Сцена: время, место, одежда, вещи', 'Календарь: какое сегодня число', 'Кто что знает',
-      'Имена: как писать и склонять', 'Отношения: чувства, воспоминания, напряжения', 'Подсказка режиссёра',
+      'Имена: как писать и склонять', 'Квесты: что в игре', 'Отношения: чувства, воспоминания, напряжения', 'Подсказка режиссёра',
     ]);
     assert.equal(titles.at(-1), 'Лорбуки: анкеты персонажей и мир');
     const blocks = [...root.querySelectorAll('.pm-block')];
@@ -260,7 +260,7 @@ test('"what the model gets": one card per block in request order, each saying wh
     // The exact text stays one fold away.
     assert.match(knowledgeCard.querySelector('.pm-raw').textContent, /unknown\[Майки\]: \(secret\)/);
     // Feelings as labelled numbers; the record says who else knows.
-    const relation = blocks[5].textContent;
+    const relation = blocks[6].textContent;
     assert.match(relation, /Привязанность 42/);
     assert.match(relation, /Страх -2/);
     assert.match(relation, /знают: Майки, Судзу, Ран/);
@@ -907,5 +907,95 @@ test('calendar builder: make one, change it, apply with a second press, keep it,
     [...root.querySelectorAll('.ku-fact button')].find(item => /^Точно/.test(item.textContent)).click();
     await settle();
     assert.equal(calls.at(-1)[1].system.id, 'ready-x');
+  } finally { studio?.destroy(); }
+});
+
+test('quests page: steps tick, a step is pushed, ending asks for a note and the promised shifts, a new quest is typed in', async () => {
+  const calls = [];
+  const base = sampleState();
+  const lineId = Object.keys(base.relationships)[0];
+  const quests = [
+    { id: 'q1', name: 'Найти сестру', text: 'пропала на прошлой неделе', status: 'active', dueDay: 9, steps: [{ id: 's1', text: 'расспросить соседей', done: true }, { id: 's2', text: 'осмотреть склад', done: false }],
+      reward: { text: 'Судзу доверяет Рану', shifts: [{ relationshipId: lineId, scaleId: 'trust', value: 5 }] } },
+    { id: 'q2', name: 'Старый долг', text: '', status: 'done', steps: [], outcome: 'вернули' },
+  ];
+  const snapshot = { ...base, quests, questToday: 10 };
+  let studio;
+  const errors = captureErrors(() => {
+    studio = createRelationshipStudio({ store: { getSnapshot: () => snapshot }, open: true, layout: { mode: 'window', tab: 'quests' }, callbacks: {
+      onQuestStep: payload => { calls.push(['step', payload]); return Promise.resolve(); },
+      onQuestPush: payload => { calls.push(['push', payload]); return Promise.resolve(); },
+      onCloseQuest: payload => { calls.push(['close', payload]); return Promise.resolve(); },
+      onAddQuest: payload => { calls.push(['add', payload]); return Promise.resolve(); },
+      onUpdateQuest: payload => { calls.push(['update', payload]); return Promise.resolve(); },
+    } });
+  });
+  try {
+    assert.deepEqual(errors, [], errors.join('\n'));
+    const root = studio.element.shadowRoot;
+    assert.equal(root.querySelectorAll('.ku-quest').length, 2);
+    const card = root.querySelector('.ku-quest.active');
+    assert.match(card.textContent, /шаги 1\/2/);
+    assert.match(card.textContent, /просрочен на 1 день/);
+    assert.ok(card.classList.contains('late'));
+    assert.ok(card.querySelector('.ku-q-step.now'), 'the current step stands out');
+    // Tick the second step.
+    card.querySelectorAll('.ku-q-step input')[1].click();
+    assert.deepEqual(calls.at(-1), ['step', { questId: 'q1', stepId: 's2', done: true }]);
+    // Bring the step in now.
+    [...card.querySelectorAll('button')].find(item => /Ввести шаг/.test(item.textContent)).click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(calls.at(-1), ['push', { questId: 'q1' }]);
+    // Ending: a note and the promised shift.
+    [...card.querySelectorAll('button')].find(item => /Выполнен/.test(item.textContent)).click();
+    const closing = root.querySelector('.ku-q-closing');
+    assert.match(closing.textContent, /Судзу доверяет Рану/);
+    assert.match(closing.textContent, /Применить сдвиги отношений \(1\)/);
+    const note = closing.querySelector('input:not([type=checkbox])');
+    note.value = 'сестра нашлась';
+    note.dispatchEvent(new window.Event('input'));
+    [...closing.querySelectorAll('button')].find(item => /Закрыть как/.test(item.textContent)).click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(calls.at(-1), ['close', { questId: 'q1', status: 'done', outcome: 'сестра нашлась', apply: true }]);
+    // A new quest.
+    [...root.querySelectorAll('button')].find(item => item.textContent === '＋ Квест').click();
+    const editor = root.querySelector('.ku-q-editor');
+    const fill = (node, value) => { node.value = value; node.dispatchEvent(new window.Event('input')); };
+    fill(editor.querySelector('input[aria-label="Название квеста"]'), 'Тайный долг');
+    fill(editor.querySelector('textarea[aria-label="Шаги квеста"]'), 'вернуть деньги\nпромолчать');
+    fill(editor.querySelector('input[aria-label="Срок: через сколько дней"]'), '3');
+    [...editor.querySelectorAll('button')].find(item => item.textContent === 'Добавить квест').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    const added = calls.at(-1);
+    assert.equal(added[0], 'add');
+    assert.equal(added[1].name, 'Тайный долг');
+    assert.deepEqual(added[1].steps, ['вернуть деньги', 'промолчать']);
+    assert.equal(added[1].dueDay, 13);
+    assert.equal(added[1].secret, false);
+  } finally { studio?.destroy(); }
+});
+
+test('side menu: a group folds, keeps the open page, and the fold is saved', async () => {
+  const saved = [];
+  let studio;
+  const errors = captureErrors(() => {
+    studio = createRelationshipStudio({ store: { getSnapshot: () => sampleState() }, open: true, layout: { mode: 'window', tab: 'weather' }, callbacks: {
+      onLayoutChange: value => { saved.push(value); },
+    } });
+  });
+  try {
+    assert.deepEqual(errors, [], errors.join('\n'));
+    const root = studio.element.shadowRoot;
+    const heads = [...root.querySelectorAll('.nav-fold')];
+    assert.equal(heads.length, 4);
+    const items = () => [...root.querySelectorAll('.nav button:not(.nav-fold) .nav-label')].map(node => node.textContent);
+    assert.ok(items().includes('Локации'));
+    heads.find(item => /Мир/.test(item.textContent)).click();
+    assert.ok(!items().includes('Локации'), 'the folded group hides its pages');
+    assert.ok(items().includes('Погода'), 'but the open page stays');
+    assert.deepEqual(saved.at(-1).folded, ['world']);
+    [...root.querySelectorAll('.nav-fold')].find(item => /Мир/.test(item.textContent)).click();
+    assert.ok(items().includes('Локации'));
+    assert.deepEqual(saved.at(-1).folded, []);
   } finally { studio?.destroy(); }
 });

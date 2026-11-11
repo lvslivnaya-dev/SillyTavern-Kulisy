@@ -1,4 +1,4 @@
-import { CALENDAR_PROMPT_KEY, CHRONICLE_PROMPT_KEY, DIRECTION_PROMPT_KEY, KNOWLEDGE_PROMPT_KEY, NAMES_PROMPT_KEY, PROMPT_KEY, SCENE_PROMPT_KEY } from './settings.js';
+import { CALENDAR_PROMPT_KEY, CHRONICLE_PROMPT_KEY, DIRECTION_PROMPT_KEY, KNOWLEDGE_PROMPT_KEY, NAMES_PROMPT_KEY, PROMPT_KEY, QUESTS_PROMPT_KEY, SCENE_PROMPT_KEY } from './settings.js';
 
 /** extension_prompt_types.IN_PROMPT: after the story string, before the chat history. */
 const POSITION_IN_PROMPT = 0;
@@ -23,6 +23,16 @@ export function clearRelationshipPrompt(context) {
   updateCalendarPrompt(context, '');
   updateDirectionPrompt(context, '');
   updateNamesPrompt(context, '');
+  updateQuestsPrompt(context, '');
+}
+
+/** Open quests of the chat (core/quests.js), already wrapped; '' removes them. */
+export function updateQuestsPrompt(context, block) {
+  try {
+    context.setExtensionPrompt(QUESTS_PROMPT_KEY, block || '', POSITION_IN_CHAT, 1, false, ROLE_SYSTEM);
+  } catch (error) {
+    console.error('[Kulisy] Failed to update the quests prompt.', error);
+  }
 }
 
 /** Spelling and case forms of the names on stage (core/name-library.js), already wrapped; '' removes them. */

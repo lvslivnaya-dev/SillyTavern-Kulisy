@@ -16,6 +16,8 @@ export const CALENDAR_PROMPT_KEY = 'kulisy-calendar';
 export const DIRECTION_PROMPT_KEY = 'kulisy-direction';
 /** Spelling and case forms of names (the name library), next to the scene block. */
 export const NAMES_PROMPT_KEY = 'kulisy-names';
+/** Open quests (core/quests.js): threads of the story that are in play. */
+export const QUESTS_PROMPT_KEY = 'kulisy-quests';
 
 export const DEFAULT_SETTINGS = Object.freeze({
   enabled: true,
@@ -42,6 +44,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   sendScene: true,
   // Send the narrator the story calendar: the date, today's events and what is coming.
   sendCalendar: true,
+  sendQuests: true,
   // Weather line in the scene block (core/weather.js).
   sendWeather: true,
   // Calendar templates, shared by all chats (core/calendar.js toTemplate).
@@ -127,6 +130,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
     width: 520,
     // Open when the page went away; only the docked panel reopens after a reload.
     open: false,
+    // Menu groups folded in the side menu (ids from NAV_GROUPS).
+    folded: [],
   },
   widget: {
     visible: true,

@@ -31,13 +31,16 @@
  */
 
 import { cleanWeather } from './weather.js';
+import { nextHeat } from './heat.js';
+import { QUEST_OPERATION_TYPES, applyQuestMutation, forgetQuestEntity, mergeQuestEntity, validateQuests } from './quests.js';
 
 export const WORLD_OPERATION_TYPES = Object.freeze([
-  'clock.set', 'weather.set',
+  'clock.set', 'weather.set', 'heat.set',
   'location.add', 'location.update', 'location.remove',
   'wardrobe.set', 'condition.add', 'condition.update', 'condition.remove',
   'item.add', 'item.update', 'item.remove',
   'feature.add', 'feature.update', 'feature.remove',
+  ...QUEST_OPERATION_TYPES,
 ]);
 
 /** Kinds of a lasting feature of someone's looks. */
@@ -208,6 +211,7 @@ export function applyWorldMutation(next, operation) {
   if (!WORLD_OPERATION_TYPES.includes(operation.type)) return false;
   const payload = operation.payload;
   const world = worldOf(next);
+  if (applyQuestMutation(next, world, operation)) return true;
   switch (operation.type) {
     case 'clock.set': {
       const clock = world.clock;
@@ -251,6 +255,12 @@ export function applyWorldMutation(next, operation) {
       if (payload.clear) { delete world.weather; break; }
       const clean = cleanWeather(payload, world.clock.day);
       if (clean) world.weather = clean;
+      break;
+    }
+    case 'heat.set': {
+      // { value } sets, { delta } shifts, { clear } removes; why = a few Russian words; lock = the chronicler leaves it alone.
+      const heat = nextHeat(world.heat, payload, world.clock.day);
+      if (heat) world.heat = heat; else delete world.heat;
       break;
     }
     case 'location.add': {
@@ -444,6 +454,7 @@ export function forgetWorldEntity(next, entityId) {
   if (!next.world) return;
   const world = worldOf(next);
   delete world.wardrobe[entityId];
+  forgetQuestEntity(world, entityId);
   for (const item of world.items) {
     if (item.ownerId === entityId) delete item.ownerId;
     if (item.knownByIds) {
@@ -487,6 +498,7 @@ export function validateWorld(world, entityIds, scene) {
       else if (entry.features != null && (!Array.isArray(entry.features) || entry.features.some(feature => !feature?.id || typeof feature.text !== 'string' || !feature.text))) errors.push(`wardrobe ${id} has a malformed feature`);
     }
   }
+  errors.push(...validateQuests(world));
   if (!Array.isArray(world.items)) errors.push('world.items must be an array');
   else {
     const ids = new Set();
@@ -559,6 +571,7 @@ export function knowsItem(item, entityId) {
 export function mergeWorldEntity(next, fromId, intoId) {
   if (!next.world) return;
   const world = worldOf(next);
+  mergeQuestEntity(world, fromId, intoId);
   const from = world.wardrobe[fromId];
   if (from) {
     const into = world.wardrobe[intoId];

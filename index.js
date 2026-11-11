@@ -66,6 +66,7 @@ import {
   removeNameFolder,
   updateNameFolder,
   buildNamesPrompt,
+  heatLevel, buildQuestsPrompt, cleanShifts, closingLine, closingShifts, currentStep, groupQuests, progressOf, questCue, questId, questsOf, dueText, daysLeft, QUEST_STATUSES,
   normalizeNames,
   removeName,
   updateName,
@@ -92,7 +93,7 @@ import {
 import { analyzeHistoryBatch, analyzeKnowledge, analyzeMessage, discoverHistoryCharacters } from './src/integration/analyzer.js';
 import { selectKnowledgeCandidates } from './src/integration/knowledge-analysis.js';
 import { detectConflicts } from './src/integration/conflicts.js';
-import { clearRelationshipPrompt, updateCalendarPrompt, updateDirectionPrompt, updateChroniclePrompt, updateKnowledgePrompt, updateNamesPrompt, updateRelationshipPrompt, updateScenePrompt } from './src/integration/prompt.js';
+import { clearRelationshipPrompt, updateCalendarPrompt, updateDirectionPrompt, updateChroniclePrompt, updateKnowledgePrompt, updateNamesPrompt, updateQuestsPrompt, updateRelationshipPrompt, updateScenePrompt } from './src/integration/prompt.js';
 import { fillNameForms } from './src/integration/name-forms.js';
 import { generateClimate } from './src/integration/weather-generation.js';
 import { generateCalendarTemplate } from './src/integration/calendar-generation.js';
@@ -152,7 +153,7 @@ function messageMarker(message) {
   return message?.extra?.[MESSAGE_EXTRA_KEY] ?? message?.extra?.[LEGACY_MESSAGE_EXTRA_KEY];
 }
 /** Plain on/off preferences edited as checkboxes in the Studio settings. */
-const TOGGLE_SETTINGS = ['linkedScales', 'autoCharacterLines', 'confirmPersonaLines', 'sendMemories', 'sendTensions', 'sendFactors', 'sendHeadcanons', 'autoHeadcanons', 'trackKnowledge', 'trackWorld', 'sendScene', 'sendCalendar', 'injectPrompt', 'confirmLargeChanges', 'knowledgeSeparateRequest', 'sendKnowledge', 'sceneChips'];
+const TOGGLE_SETTINGS = ['linkedScales', 'autoCharacterLines', 'confirmPersonaLines', 'sendMemories', 'sendTensions', 'sendFactors', 'sendHeadcanons', 'autoHeadcanons', 'trackKnowledge', 'trackWorld', 'sendScene', 'sendCalendar', 'sendQuests', 'injectPrompt', 'confirmLargeChanges', 'knowledgeSeparateRequest', 'sendKnowledge', 'sceneChips'];
 let controller = null;
 
 function normalizeEmbeddings(config) {
@@ -300,21 +301,25 @@ export async function init() {
       weatherScenarios: BUILTIN_SCENARIOS,
       weatherWeek: weekForecast(state, { plan: state.ui?.weatherPlan, climates: settings.weatherClimates, dateOfDay: day => dateOfDay(calendarOf(state), day), ...weatherCalendar(state) }),
       weatherDated: Boolean(dateOfDay(calendarOf(state), state.world?.clock?.day ?? 0)),
+      quests: questsOf(state),
+      questToday: state.world?.clock?.day ?? 0,
+      questSecretsHidden: settings.sendQuests === false,
       namesChatOff: Boolean(state.ui?.namesOff),
       namesTokens,
       calendarTokens,
       reveals: openReveals(),
       promptBlocks: describeBlocks({
         parts: promptParts,
-        tokens: { chronicle: chronicleTokens, scene: sceneTokens, calendar: calendarTokens, knowledge: knowledgeTokens, names: namesTokens, relationships: promptTokens, direction: directionTokens },
+        tokens: { chronicle: chronicleTokens, scene: sceneTokens, calendar: calendarTokens, knowledge: knowledgeTokens, names: namesTokens, quests: questsTokens, relationships: promptTokens, direction: directionTokens },
         enabled: settings.enabled ? {
           chronicle: chronicleConfig(settings.chronicle).enabled ? true : 'Хроника выключена: сводки не пишутся и не уходят модели.',
           scene: settings.sendScene !== false && settings.trackWorld !== false ? true : 'Выключено: «Сцена в промпт» или слежение за миром.',
           calendar: settings.sendCalendar !== false ? true : 'Выключено: «Календарь в промпт».',
           knowledge: settings.sendKnowledge !== false ? true : 'Выключено: «Знания в промпт».',
           names: state.ui?.namesOff ? 'Выключено в этом чате (Мир → Имена).' : normalizeNames(settings.nameLibrary).enabled ? true : 'Выключено: переключатель «Отправлять имена» (Мир → Имена).',
+          quests: settings.sendQuests !== false ? true : 'Выключено: «Квесты в промпт» (Настройки → Знания и сцена).',
           relationships: settings.injectPrompt ? true : 'Выключено: отправка отношений.',
-        } : Object.fromEntries(['chronicle', 'scene', 'calendar', 'knowledge', 'names', 'relationships', 'direction'].map(id => [id, 'Кулисы выключены.'])),
+        } : Object.fromEntries(['chronicle', 'scene', 'calendar', 'knowledge', 'names', 'quests', 'relationships', 'direction'].map(id => [id, 'Кулисы выключены.'])),
       }),
       tidy: { autoSecrets: autoSecrets(state).length, foldable: duplicateBuckets(state).reduce((sum, bucket) => sum + bucket.events.length, 0) },
       dossiers: Object.fromEntries(Object.keys(state.entities).map(id => [id, dossier(state, id)])),
@@ -406,6 +411,7 @@ export async function init() {
   let promptTokens = 0;
   let knowledgeTokens = 0;
   let namesTokens = 0;
+  let questsTokens = 0;
   let chronicleTokens = 0;
   let sceneTokens = 0;
   let calendarTokens = 0;
@@ -483,7 +489,7 @@ export async function init() {
   // A book linked to Kulisy only is read by the analyzer, but the model never gets it.
   let tavernBooks = null;
   // The blocks as they were last handed to SillyTavern, for «Что получает модель».
-  const promptParts = { chronicle: '', scene: '', calendar: '', knowledge: '', names: '', relationships: '', direction: '' };
+  const promptParts = { chronicle: '', scene: '', calendar: '', knowledge: '', names: '', quests: '', relationships: '', direction: '' };
   let directionTokens = 0;
   /** The user's fresh post and the reply before it, apart: a name in the post weighs more than one in the reply. A reply being swiped is not counted. */
   function gateTexts(chat) {
@@ -673,6 +679,14 @@ ${replyText}` });
     namesTokens = namesBlock ? countTokens(namesBlock) : 0;
     promptParts.names = namesBlock;
     updateNamesPrompt(ctx, namesBlock);
+    // Open quests: only the ones in play (a secret one only with a knower on stage).
+    let questsBlock = '';
+    try {
+      if (settings.enabled && settings.sendQuests !== false && !state.world?.clock?.flashback) questsBlock = buildQuestsPrompt(state, { presentIds: presentIds(state) });
+    } catch (error) { console.error('[Kulisy] Quests prompt failed.', error); }
+    questsTokens = questsBlock ? countTokens(questsBlock) : 0;
+    promptParts.quests = questsBlock;
+    updateQuestsPrompt(ctx, questsBlock);
     if (!settings.enabled || !settings.injectPrompt) {
       promptTokens = 0;
       promptParts.relationships = '';
@@ -995,6 +1009,24 @@ ${replyText}` });
     await commit(next, true);
     refreshPrompt();
   }
+
+  /** A quest step goes to the narrator with the next reply (the cue «квест»). */
+  const questCallbacks = {
+    onQuestPush: async ({ questId: id }) => {
+      try {
+        const quest = questsOf(state).find(item => item.id === id);
+        if (!quest) throw new Error('Квест не найден.');
+        if (quest.status !== 'active') throw new Error('Квест не идёт: сначала верните его в игру.');
+        await saveDirection(armCue(directionState(), { ...questCue(quest), id: uniqueId('cue') }, Object.keys(state.entities)));
+        refreshChatOverlay();
+        globalThis.toastr?.success?.('Шаг уйдёт со следующим ответом', 'Кулисы');
+        return true;
+      } catch (error) {
+        globalThis.toastr?.error?.(error.message, 'Кулисы');
+        return false;
+      }
+    },
+  };
 
   /** The intimacy dice settings (Мир → Кубик). */
   const diceCallbacks = {
@@ -1683,6 +1715,38 @@ ${replyText}` });
     return deaths.reverse();
   }
 
+  /** Quest proposals of the chronicler nobody answered yet, worded for the plaque; newest first. */
+  function openQuestHints(chat = SillyTavern.getContext().chat ?? []) {
+    const hints = [];
+    chat.forEach((message, messageIndex) => {
+      for (const hint of message?.extra?.[MESSAGE_EXTRA_KEY]?.quests ?? []) {
+        const quest = questsOf(state).find(item => item.id === hint.questId);
+        if (hint.kind === 'new') {
+          if (questsOf(state).some(item => item.name.toLocaleLowerCase('ru-RU') === hint.name.toLocaleLowerCase('ru-RU'))) continue;
+          hints.push({ messageIndex, id: hint.id, title: `Похоже, началось задание «${hint.name}».`, detail: [hint.text, hint.steps?.length ? `Шагов: ${hint.steps.length}` : ''].filter(Boolean).join(' '), confirm: 'Добавить квест', confirmTitle: 'Добавить квест в список (квесты этого ответа откатываются свайпом)' });
+        } else if (hint.kind === 'step') {
+          if (!quest || quest.status !== 'active' || quest.steps.find(step => step.id === hint.stepId)?.done !== false) continue;
+          hints.push({ messageIndex, id: hint.id, title: `Шаг квеста «${quest.name}» сделан?`, detail: `«${hint.stepText}»`, confirm: 'Отметить шаг', confirmTitle: 'Отметить шаг выполненным' });
+        } else if (hint.kind === 'end') {
+          if (!quest || quest.status !== 'active') continue;
+          const label = hint.status === 'done' ? 'выполнен' : 'провален';
+          const shifts = closingShifts(quest, hint.status).length;
+          hints.push({ messageIndex, id: hint.id, title: `Квест «${quest.name}» ${label}?`, detail: [hint.note, shifts ? `Отношения сдвинутся: ${shifts}` : ''].filter(Boolean).join(' '), confirm: `Закрыть: ${label}`, confirmTitle: shifts ? 'Закрыть квест; обещанные сдвиги отношений применятся' : 'Закрыть квест' });
+        }
+      }
+    });
+    return hints.reverse();
+  }
+
+  async function forgetQuestHint(messageIndex, hintId) {
+    const ctx = SillyTavern.getContext();
+    const marker = ctx.chat?.[messageIndex]?.extra?.[MESSAGE_EXTRA_KEY];
+    if (!marker?.quests) return;
+    marker.quests = marker.quests.filter(hint => hint.id !== hintId);
+    if (!marker.quests.length) delete marker.quests;
+    await ctx.saveChat();
+  }
+
   /** Lorebook secrets the chronicler thinks someone found out; still unanswered. Newest first. */
   function openReveals(chat = SillyTavern.getContext().chat ?? []) {
     const reveals = [];
@@ -2047,6 +2111,38 @@ ${replyText}` });
       await forgetReveal(messageIndex, entityId, eventId);
       notify();
     },
+    /** From the plaque: journaled with that message, so deleting or re-checking it takes the quest change back. */
+    onQuestHintConfirm: async ({ messageIndex, hintId }) => {
+      const ctx = SillyTavern.getContext();
+      const marker = ctx.chat?.[messageIndex]?.extra?.[MESSAGE_EXTRA_KEY];
+      const hint = marker?.quests?.find(item => item.id === hintId);
+      if (!marker || !hint) throw new Error('Отметка уже снята.');
+      const meta = reason => ({ transactionId: marker.transactionId ?? uniqueId('quest'), messageId: String(messageIndex), messageIndex, id: uniqueId('analysis'), reason, timestamp: new Date().toISOString() });
+      const quest = questsOf(state).find(item => item.id === hint.questId);
+      const operations = [];
+      if (hint.kind === 'new') {
+        operations.push(createOperation('quest.add', { item: { id: questId(), name: hint.name, text: hint.text, steps: hint.steps ?? [] } }, meta(`Новый квест: ${hint.name}`)));
+      } else if (hint.kind === 'step') {
+        if (!quest) throw new Error('Квест уже удалён.');
+        operations.push(createOperation('quest.step', { questId: quest.id, stepId: hint.stepId, done: true }, meta(`Квест «${quest.name}»: шаг выполнен`)));
+      } else if (hint.kind === 'end') {
+        if (!quest) throw new Error('Квест уже удалён.');
+        const label = hint.status === 'done' ? 'выполнен' : 'провален';
+        operations.push(createOperation('quest.update', { questId: quest.id, changes: { status: hint.status, outcome: hint.note ?? '' } }, meta(`Квест «${quest.name}» ${label}`)));
+        for (const shift of cleanShifts(closingShifts(quest, hint.status), state)) {
+          operations.push(createOperation('scale.delta', { relationshipId: shift.relationshipId, scaleId: shift.scaleId, value: shift.value }, meta(`Квест «${quest.name}» ${label}: сдвиг отношений`)));
+        }
+      }
+      marker.operationIds = [...(marker.operationIds ?? []), ...operations.map(operation => operation.id)];
+      await commit(applyOperations(state, operations), true);
+      await forgetQuestHint(messageIndex, hintId);
+      refreshPrompt();
+      notify();
+    },
+    onQuestHintDismiss: async ({ messageIndex, hintId }) => {
+      await forgetQuestHint(messageIndex, hintId);
+      notify();
+    },
     onDeathDismiss: async ({ messageIndex, entityId }) => {
       await forgetDeath(messageIndex, entityId);
       notify();
@@ -2314,6 +2410,7 @@ ${card.personality ?? card.data?.personality ?? ''}`;
     ...namesCallbacks,
     ...weatherCallbacks,
     ...diceCallbacks,
+    ...questCallbacks,
     ...libraryCallbacks,
     ...chronicleRunner.callbacks,
     ...worldCallbacks,
@@ -3068,6 +3165,7 @@ ${card.personality ?? card.data?.personality ?? ''}`;
     const operations = applied.operations;
     const leaks = applied.leaks ?? [];
     const deaths = applied.deaths ?? [];
+    const questHints = applied.quests ?? [];
     const reveals = applied.reveals ?? [];
     const secretHints = applied.secrets ?? [];
     const slips = applied.slips ?? [];
@@ -3086,7 +3184,7 @@ ${card.personality ?? card.data?.personality ?? ''}`;
       next = { ...next, ui: { ...next.ui, headcanons: added.headcanons } };
       headcanonIds.push(...added.ids);
     }
-    if (!operations.length && !headcanonIds.length && !leaks.length && !deaths.length && !reveals.length && !secretHints.length && !slips.length) return skip('модель не нашла изменений');
+    if (!operations.length && !headcanonIds.length && !leaks.length && !deaths.length && !reveals.length && !secretHints.length && !slips.length && !questHints.length) return skip('модель не нашла изменений');
     message.extra ??= {};
     message.extra[MESSAGE_EXTRA_KEY] = {
       fingerprint: textHash,
@@ -3097,6 +3195,8 @@ ${card.personality ?? card.data?.personality ?? ''}`;
       ...(leaks.length ? { leaks } : {}),
       // A death is only proposed: the plaque under the reply asks, the answer is journaled with this message.
       ...(deaths.length ? { deaths } : {}),
+      // Quests the reply shows (a new one, a step done, an end): proposals only, the plaque asks.
+      ...(questHints.length ? { quests: questHints } : {}),
       // A lorebook secret reaching someone is asked too: «Отметить» journals it with this message.
       ...(reveals.length ? { reveals } : {}),
       // A guess at a real secret: only offered under the reply, nothing is written until the person confirms.
@@ -3499,6 +3599,13 @@ ${card.personality ?? card.data?.personality ?? ''}`;
       },
       clock: { time: state.world?.clock?.time ?? '', day: state.world?.clock?.day ?? 0, label: state.world?.clock?.label ?? '' },
       dice: diceView(),
+      quests: enabled ? questsOf(state).filter(quest => quest.status === 'active').slice(0, 6).map(quest => {
+        const step = currentStep(quest);
+        const progress = progressOf(quest);
+        const pushed = directionState().cues.some(cue => cue.kind === 'quest' && cue.text.startsWith(quest.name));
+        return { id: quest.id, name: quest.name, secret: Boolean(quest.secret), stepId: step?.id ?? '', step: step?.text ?? '', progress: progress.total ? `${progress.done}/${progress.total}` : '', due: dueText(quest, state.world?.clock?.day ?? 0), pushed };
+      }) : [],
+      heat: (() => { const found = state.world?.heat; return { value: found?.value ?? 0, label: heatLevel(found?.value ?? 0).label, lock: Boolean(found?.lock), why: found?.why ?? '' }; })(),
       sceneMode: state.world?.clock?.mode ?? 'calm',
       weather: (() => { const found = currentWeather(); return found ? { kind: found.kind, temp: found.temp, source: found.source, badge: weatherBadge(found) } : null; })(),
       location: state.knowledge?.scene?.location ?? '',
@@ -3506,6 +3613,7 @@ ${card.personality ?? card.data?.personality ?? ''}`;
       time: settings.trackWorld !== false ? [state.world?.clock?.time ?? '', calendarShortDate(calendarOf(), dateOfDay(calendarOf(), state.world?.clock?.day ?? 0))].filter(Boolean).join(' · ') : '',
       leaks: enabled ? openLeaks() : [],
       deaths: enabled ? openDeaths() : [],
+      questHints: enabled ? openQuestHints() : [],
       reveals: enabled ? openReveals() : [],
       secretHints: enabled ? openSecretHints() : [],
       secrets: enabled ? (state.knowledge?.events ?? []).filter(event => event.secret && !event.disabled).length : 0,
@@ -3516,6 +3624,9 @@ ${card.personality ?? card.data?.personality ?? ''}`;
 
   const LEAK_ACTIONS = { swipe: 'onLeakSwipe', knows: 'onLeakKnows', dismiss: 'onLeakDismiss' };
   const chatOverlay = mountChatOverlay({
+    onHeat: payload => Promise.resolve(worldCallbacks.onSetHeat(payload)).catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
+    onQuestStep: payload => Promise.resolve(worldCallbacks.onQuestStep(payload)).catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
+    onQuestPush: payload => questCallbacks.onQuestPush(payload),
     onDiceRoll: ({ only }) => diceRoll(only || ''),
     onDiceToggle: ({ group, option }) => diceToggle(group, option),
     onDiceLock: ({ group }) => diceLock(group),
@@ -3534,6 +3645,8 @@ ${card.personality ?? card.data?.personality ?? ''}`;
     onLeak: (action, payload) => knowledgeCallbacks[LEAK_ACTIONS[action]]?.(payload)
       .catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
     onReveal: (action, payload) => knowledgeCallbacks[action === 'confirm' ? 'onRevealConfirm' : 'onRevealDismiss'](payload)
+      .catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
+    onQuestHint: (action, payload) => knowledgeCallbacks[action === 'confirm' ? 'onQuestHintConfirm' : 'onQuestHintDismiss'](payload)
       .catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
     onDeath: (action, payload) => knowledgeCallbacks[action === 'confirm' ? 'onDeathConfirm' : 'onDeathDismiss'](payload)
       .catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),

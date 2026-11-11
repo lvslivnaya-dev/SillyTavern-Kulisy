@@ -22,6 +22,7 @@ import { CALENDAR_BUILDER_STYLE } from './pages/calendar-builder.js';
 import { NAMES_STYLE, createNamesPages } from './pages/names.js';
 import { WEATHER_STYLE, createWeatherPages } from './pages/weather.js';
 import { DICE_STYLE, createDicePages } from './pages/dice.js';
+import { QUESTS_STYLE, createQuestsPages } from './pages/quests.js';
 
 const STYLE = `
 ${hostThemeCss('--rs-bg:var(--k-bg);--rs-panel:var(--k-panel);--rs-inset:var(--k-inset);--rs-track:var(--k-track);--rs-line:var(--k-line);--rs-text:var(--k-text);--rs-muted:var(--k-muted);--rs-accent:var(--k-accent);--rs-danger:var(--k-danger);--rs-backdrop:var(--k-backdrop)')}
@@ -34,6 +35,7 @@ const TABS = NAV_TABS;
 const PAGE_TITLES = Object.freeze({
   scene: 'Сейчас', characters: 'Персонажи', persona: 'Персона', leaks: 'Проверка ответов', events: 'Лента событий', secrets: 'Секреты',
   chronicle: 'Хроника', places: 'Локации', items: 'Вещи', wardrobe: 'Гардероб', calendar: 'Календарь',
+  weather: 'Погода', dice: 'Кубик близости', names: 'Имена', quests: 'Квесты',
   overview: 'Все отношения', headcanons: 'Хедканоны отношений',
   journal: 'История изменений', lorebooks: 'Подключённые лорбуки', settings: 'Настройки',
 });
@@ -57,7 +59,7 @@ export function createRelationshipStudio(options = {}) {
   let triangleSetupId = null; // triangle whose setup sheet is open in the factors layer
   const isPhone = () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 760px)').matches;
 
-  const style = element('style', { text: STYLE + KNOWLEDGE_STYLE + SETTINGS_STYLE + WORLD_STYLE + WARDROBE_STYLE + LIBRARY_STYLE + CALENDAR_STYLE + CALENDAR_BUILDER_STYLE + NAMES_STYLE + WEATHER_STYLE + DICE_STYLE + `
+  const style = element('style', { text: STYLE + KNOWLEDGE_STYLE + SETTINGS_STYLE + WORLD_STYLE + WARDROBE_STYLE + LIBRARY_STYLE + CALENDAR_STYLE + CALENDAR_BUILDER_STYLE + NAMES_STYLE + WEATHER_STYLE + DICE_STYLE + QUESTS_STYLE + `
     .relationship-card{min-width:0;overflow:hidden}.relationship-card .grid{display:flex;flex-direction:column;gap:14px}.relationship-card .card{min-width:0;width:100%;position:static;grid-area:auto}.relationship-card .metric{grid-template-columns:minmax(80px,110px) minmax(0,1fr) 42px}.relationship-card input[type=range]{min-width:0;width:100%}.item p{overflow-wrap:anywhere}.chips{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0}.chips .active{border-color:var(--rs-accent)}.triangle-edges{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:12px}.header{flex-wrap:wrap}
     input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:20px;background:transparent;cursor:pointer;accent-color:var(--rs-accent)}
     input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:4px;background:var(--rs-track);border:1px solid var(--rs-line)}
@@ -214,6 +216,11 @@ export function createRelationshipStudio(options = {}) {
     .nav{gap:2px}
     .nav-group{font:700 11px/1.2 var(--k-font);letter-spacing:.1em;text-transform:uppercase;color:var(--k-muted);margin:16px 6px 5px}
     .nav-group:first-child{margin-top:0}
+    .nav button.nav-fold{display:flex;align-items:center;justify-content:space-between;width:100%;min-height:0;padding:4px 6px;margin:12px 0 2px;border-radius:8px;font:700 11px/1.2 var(--k-font);letter-spacing:.1em;text-transform:uppercase;color:var(--k-muted);cursor:pointer}
+    .nav button.nav-fold:first-child{margin-top:0}
+    .nav button.nav-fold:hover{color:var(--k-text);background:var(--k-panel)}
+    .nav button.nav-fold .ku-ico,.nav button.nav-fold .ku-ico svg{width:14px;height:14px;transition:transform .15s}
+    .nav button.nav-fold.folded .ku-ico{transform:rotate(-90deg)}
     .nav button{display:flex;align-items:center;gap:10px;min-height:38px;border-color:transparent;background:transparent}
     .nav button .ku-ico{color:var(--k-muted)}
     .nav button:hover{border-color:var(--k-line);background:var(--k-panel)}
@@ -337,7 +344,7 @@ export function createRelationshipStudio(options = {}) {
   }
 
   function saveLayout() {
-    try { facade.invoke('onLayoutChange', { mode: layout.mode, tab, width: layout.width, open: isOpen }); }
+    try { facade.invoke('onLayoutChange', { mode: layout.mode, tab, width: layout.width, open: isOpen, folded: layout.folded }); }
     catch (error) { console.error('[Kulisy] Could not save the Studio layout.', error); }
   }
 
@@ -552,8 +559,24 @@ export function createRelationshipStudio(options = {}) {
   function renderSidebar() {
     const nav = element('nav', { className: 'nav', 'aria-label': 'Разделы Кулис' });
     for (const group of NAV_GROUPS) {
-      nav.append(element('p', { className: 'nav-group', text: group.title, 'aria-hidden': 'true' }));
+      // Folding is for the wide menu only: the narrow dock shows icons and a hairline between groups.
+      const foldable = !isDocked();
+      const folded = foldable && layout.folded.includes(group.id);
+      if (foldable) {
+        const head = button('', `nav-group nav-fold${folded ? ' folded' : ''}`, () => {
+          layout.folded = folded ? layout.folded.filter(id => id !== group.id) : [...layout.folded, group.id];
+          saveLayout();
+          render();
+        }, folded ? `Развернуть «${group.title}»` : `Свернуть «${group.title}»`);
+        head.append(element('span', { text: group.title }), icon('chevron'));
+        head.setAttribute('aria-expanded', String(!folded));
+        nav.append(head);
+      } else {
+        nav.append(element('p', { className: 'nav-group', text: group.title, 'aria-hidden': 'true' }));
+      }
       for (const [id, label, iconName] of group.items) {
+        // A folded group still shows the page that is open, so the menu never loses your place.
+        if (folded && id !== tab) continue;
         const pending = PENDING_TABS.has(id);
         const item = button('', id === tab ? 'active' : '', () => setTab(id), pending ? `${label} — раздел в работе` : label);
         item.append(icon(iconName), element('span', { className: 'nav-label', text: label }));
@@ -695,7 +718,7 @@ export function createRelationshipStudio(options = {}) {
       ...(tab === 'overview' ? [element('span', { className: 'muted', text: 'Направление важно: обратная связь редактируется отдельно.' })] : []),
     ]);
     content.append(hero);
-    const knowledgePage = { scene: renderNow, characters: renderCharacters, events: renderEvents, secrets: renderSecrets, persona: renderPersonaPage, leaks: renderChecks, chronicle: renderChronicle, places: renderPlaces, items: renderItems, wardrobe: renderWardrobe, calendar: renderCalendar, names: renderNames, weather: renderWeather, dice: renderDice }[tab];
+    const knowledgePage = { scene: renderNow, characters: renderCharacters, events: renderEvents, secrets: renderSecrets, persona: renderPersonaPage, leaks: renderChecks, chronicle: renderChronicle, places: renderPlaces, items: renderItems, wardrobe: renderWardrobe, calendar: renderCalendar, names: renderNames, weather: renderWeather, dice: renderDice, quests: renderQuests }[tab];
     if (knowledgePage) {
       content.append(knowledgePage());
       return content;
@@ -776,13 +799,13 @@ export function createRelationshipStudio(options = {}) {
     get triangleSetupId() { return triangleSetupId; },
     set triangleSetupId(value) { triangleSetupId = value; },
   };
-  for (const create of [createDialogs, createCharactersPage, createOverviewPage, createRecordsPage, createHeadcanonsPage, createTrianglesPage, createSystemPages, createKnowledgePages, createWorldPages, createWardrobePages, createLibraryPages, createCalendarPages, createNamesPages, createWeatherPages, createDicePages]) Object.assign(ctx, create(ctx));
+  for (const create of [createDialogs, createCharactersPage, createOverviewPage, createRecordsPage, createHeadcanonsPage, createTrianglesPage, createSystemPages, createKnowledgePages, createWorldPages, createWardrobePages, createLibraryPages, createCalendarPages, createNamesPages, createWeatherPages, createDicePages, createQuestsPages]) Object.assign(ctx, create(ctx));
   cleanups.push(() => ctx.destroyWardrobe?.(), () => ctx.destroyLibrary?.());
   const {
     renderFactorsDialog, renderTriangleDialog, renderAllRelationships, renderCollection, renderJournal,
     renderLorebooks, renderTriangles, renderHeadcanons, renderSettings,
     renderCharacters, renderEvents, renderSecrets,
-    renderNow, renderPlaces, renderItems, renderChronicle, renderChecks, renderWardrobe, renderCalendar, renderNames, renderWeather, renderDice,
+    renderNow, renderPlaces, renderItems, renderChronicle, renderChecks, renderWardrobe, renderCalendar, renderNames, renderWeather, renderDice, renderQuests,
   } = ctx;
 
   document.addEventListener('keydown', onKeyDown);

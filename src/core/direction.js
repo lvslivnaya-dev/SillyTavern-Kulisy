@@ -20,7 +20,7 @@ export const EVENT_GENRES = Object.freeze({
   pressure: { label: 'Психологическое давление', icon: '🕸', en: 'psychological pressure: manipulation, intimidation, gaslighting or coercion aimed at a character' },
 });
 
-export const CUE_KINDS = Object.freeze(['enter', 'react', 'custom', 'factor', 'secret', 'hold', 'focus', 'call', 'leave', 'event', 'scene', 'note', 'recall', 'dice']);
+export const CUE_KINDS = Object.freeze(['enter', 'react', 'custom', 'factor', 'secret', 'hold', 'focus', 'call', 'leave', 'event', 'scene', 'note', 'recall', 'dice', 'quest']);
 export const DIRECTION_LIMITS = Object.freeze({ cues: 20, text: 400, sceneText: 1200, place: 120, cast: 20, wait: 9, favorites: 30, favorite: 200 });
 /** How much story time a new scene skips (the narrator's words; the chronicler moves the clock). */
 export const SCENE_SKIPS = Object.freeze({ none: '', hour: 'an hour later', evening: 'later that evening', nextday: 'the next day', week: 'a week later' });
@@ -73,8 +73,8 @@ function normalizeCue(raw, knownIds) {
   if (['custom', 'factor', 'secret', 'note', 'recall'].includes(raw.kind) && !text) return null;
   if (text) cue.text = text;
   if (raw.label) cue.label = clip(raw.label, 120);
-  if (raw.kind === 'dice') {
-    // The intimacy dice: `text` is the short Russian line, `detail` what the narrator is told.
+  if (raw.kind === 'dice' || raw.kind === 'quest') {
+    // The intimacy dice (and a quest step brought in): `text` is the short Russian line, `detail` what the narrator is told.
     const detail = clip(raw.detail, 700);
     if (!detail || !cue.text) return null;
     cue.detail = detail;
@@ -107,6 +107,7 @@ export function armCue(direction, raw, knownIds = null) {
     if (old.kind === 'dice' && cue.kind === 'dice') return true; // one roll per reply
     // The same thing to recall is armed once; different ones add up.
     if (old.kind === 'recall' && cue.kind === 'recall') return old.text === cue.text;
+    if (old.kind === 'quest' && cue.kind === 'quest') return old.text === cue.text;
     if (!cue.entityId || old.entityId !== cue.entityId) return false;
     if (EXCLUSIVE.has(old.kind) && EXCLUSIVE.has(cue.kind)) return true;
     // «Молчит» and «Только он» for the same character contradict each other.
@@ -189,13 +190,14 @@ export function cueLabel(cue, nameOf) {
     case 'note': return `рассказчику: ${clip(cue.text, 40)}`;
     case 'recall': return `вспомнить: ${clip(cue.text, 40)}`;
     case 'dice': return `кубик: ${clip(cue.text, 60)}`;
+    case 'quest': return `квест: ${clip(cue.text, 60)}`;
     default: return cue.kind;
   }
 }
 
 /** Badge shown on a character's chip for their armed or active cue. */
 export function cueBadge(cue) {
-  return { enter: '👟', react: '💬', custom: '✍', factor: '❤', secret: '🔒', hold: '🤐', focus: '🎯', call: '🚪', leave: '🚪', event: '⚡', scene: '🎬', note: '📝', recall: '📌', dice: '🎲' }[cue.kind] ?? '👟';
+  return { enter: '👟', react: '💬', custom: '✍', factor: '❤', secret: '🔒', hold: '🤐', focus: '🎯', call: '🚪', leave: '🚪', event: '⚡', scene: '🎬', note: '📝', recall: '📌', dice: '🎲', quest: '🧭' }[cue.kind] ?? '👟';
 }
 
 function cueLine(cue, nameOf, presentSet) {
@@ -236,6 +238,7 @@ function cueLine(cue, nameOf, presentSet) {
     }
     case 'note': return `Note for the narrator: ${cue.text}`;
     case 'dice': return `The intimate scene in this reply takes this direction (a roll of the dice; adapt it to where the scene really is and who is in it, never announce it): ${cue.detail}. {{user}} is never the one who leads and is never written for: show only what the other characters do, say and think, and leave {{user}}'s side to the user.`;
+    case 'quest': return `A quest thread comes forward in this reply: ${cue.detail}. Let it surface through the scene itself (a person, a place, an event, a clue), woven in and never announced as a task. Do not complete the step and do not decide or write anything for {{user}}.`;
     case 'recall': return `Bring this back into play in this reply: «${cue.text}». Someone who knows it recalls it, mentions it, or it visibly shapes how they act — woven into the scene, not recited. Those who do not know it must not refer to it.`;
     default: return '';
   }

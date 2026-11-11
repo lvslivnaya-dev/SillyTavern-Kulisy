@@ -355,3 +355,72 @@ test('the dice tile appears only in an intimate scene; options are chips, the ch
     assert.match(tileOf(bar, 'Кубик').textContent, /отправлен/);
   } finally { overlay.unmount(); }
 });
+
+test('the quests tile lists what is in play: tick the current step, bring it in, open the page', async () => {
+  const calls = [];
+  const overlay = mountChatOverlay({
+    onTogglePresent: () => {}, onLeak: () => {},
+    onQuestStep: payload => { calls.push(['step', payload]); },
+    onQuestPush: payload => { calls.push(['push', payload]); },
+    onOpenStudio: tab => { calls.push(['open', tab]); },
+  });
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+  try {
+    overlay.render(view({ quests: [], director: { open: true } }));
+    const bar = document.getElementById('ku-scene-chips');
+    assert.match(tileOf(bar, 'Квесты').textContent, /нет/);
+    overlay.render(view({ quests: [{ id: 'q1', name: 'Найти сестру', secret: true, stepId: 's2', step: 'осмотреть склад', progress: '1/3', due: 'осталось 2 дня', pushed: false }], director: { open: true } }));
+    assert.match(tileOf(bar, 'Квесты').textContent, /1 идут/);
+    tileOf(bar, 'Квесты').click();
+    const card = bar.querySelector('.ku-dir-quests');
+    assert.match(card.textContent, /🔒 Найти сестру/);
+    assert.match(card.textContent, /1\/3 · осталось 2 дня/);
+    assert.match(card.textContent, /осмотреть склад/);
+    [...card.querySelectorAll('button')].find(item => /Шаг выполнен/.test(item.textContent)).click(); await settle();
+    assert.deepEqual(calls.at(-1), ['step', { questId: 'q1', stepId: 's2', done: true }]);
+    [...bar.querySelector('.ku-dir-quests').querySelectorAll('button')].find(item => /Ввести сейчас/.test(item.textContent)).click(); await settle();
+    assert.deepEqual(calls.at(-1), ['push', { questId: 'q1' }]);
+  } finally { overlay.unmount(); }
+});
+
+test('a quest guess goes under the reply with Add / No, and answers carry the hint', () => {
+  const actions = [];
+  const overlay = mountChatOverlay({ onTogglePresent: () => {}, onLeak: () => {}, onQuestHint: (action, payload) => actions.push([action, payload]) });
+  try {
+    overlay.render(view({ leaks: [], questHints: [{ messageIndex: 4, id: 'new:тайный долг', title: 'Похоже, началось задание «Тайный долг».', detail: 'надо вернуть Шагов: 1', confirm: 'Добавить квест', confirmTitle: 'Добавить' }] }));
+    const note = document.querySelector('.mes[mesid="4"] .ku-quest-note-chat');
+    assert.ok(note, 'the plaque is under the reply');
+    assert.equal(note.previousElementSibling.className, 'mes_text');
+    assert.match(note.textContent, /Тайный долг/);
+    for (const label of ['Добавить квест', 'Нет']) [...note.querySelectorAll('button')].find(button => button.textContent === label).click();
+    assert.deepEqual(actions, [['confirm', { messageIndex: 4, hintId: 'new:тайный долг' }], ['dismiss', { messageIndex: 4, hintId: 'new:тайный долг' }]]);
+    overlay.render(view({ leaks: [], questHints: [] }));
+    assert.equal(document.querySelectorAll('.ku-quest-note-chat').length, 0);
+  } finally { overlay.unmount(); }
+});
+
+test('the heat tile shows the number, the panel nudges, sets, locks and resets it', async () => {
+  const calls = [];
+  const overlay = mountChatOverlay({ onTogglePresent: () => {}, onLeak: () => {}, onHeat: payload => { calls.push(payload); } });
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+  try {
+    overlay.render(view({ heat: { value: 0, label: 'спокойно', lock: false, why: '' }, director: { open: true } }));
+    const bar = document.getElementById('ku-scene-chips');
+    assert.match(tileOf(bar, 'Накал').textContent, /спокойно/);
+    overlay.render(view({ heat: { value: 72, label: 'накалено', lock: false, why: 'ссора' }, director: { open: true } }));
+    assert.match(tileOf(bar, 'Накал').textContent, /72 · накалено/);
+    tileOf(bar, 'Накал').click();
+    const card = () => bar.querySelector('.ku-dir-heat');
+    assert.match(card().textContent, /ссора/);
+    assert.equal(card().querySelector('.ku-heat-fill').style.width, '72%');
+    const press = label => [...card().querySelectorAll('button')].find(item => item.textContent === label);
+    press('−10').click(); await settle();
+    assert.deepEqual(calls.at(-1), { delta: -10 });
+    press('90').click(); await settle();
+    assert.deepEqual(calls.at(-1), { value: 90 });
+    press('🔓 Держать').click(); await settle();
+    assert.deepEqual(calls.at(-1), { lock: true });
+    press('Сбросить').click(); await settle();
+    assert.deepEqual(calls.at(-1), { clear: true });
+  } finally { overlay.unmount(); }
+});

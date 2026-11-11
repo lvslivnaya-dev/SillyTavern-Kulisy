@@ -51,4 +51,9 @@ export {
   BUILTIN_CLIMATES, BUILTIN_SCENARIOS, MONTH_NAMES, WEATHER_KINDS, WEATHER_KIND_IDS, WEATHER_LIMITS,
   addScenario, cleanWeather, findClimate, forecastDay, normalizeClimate, normalizeClimates, normalizePlan, removeScenario, scenarioFrom, weatherBadge, weatherFor, weatherLine, weekForecast,
 } from './weather.js';
+export { HEAT_LEVELS, HEAT_MAX_DROP, HEAT_RULE, cleanHeat, heatFromReply, heatLevel, heatLine, nextHeat } from './heat.js';
 export { EARTH_CLOCK, READY_SYSTEMS, SYSTEM_LIMITS, makeClock, normalizeSystem, normalizeSystems, systemClimate, yearLength } from './calendar-system.js';
+export {
+  QUEST_LABELS, QUEST_LIMITS, QUEST_OPERATION_TYPES, QUEST_STATUSES,
+  buildQuestsPrompt, cleanShifts, closingLine, closingShifts, currentStep, daysLeft, dueText, groupQuests, progressOf, questCue, questId, questsForPrompt, questsOf,
+} from './quests.js';

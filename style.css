@@ -311,3 +311,14 @@
 #ku-scene-chips .ku-dir-dice-row { padding-top: 8px; margin-top: 2px; border-top: 1px solid color-mix(in srgb, var(--SmartThemeBodyColor) 22%, transparent); align-items: flex-start; }
 #ku-scene-chips .ku-dir-dice .ku-dir-card-head + .ku-dir-row { padding-bottom: 6px; }
 #ku-scene-chips .ku-dice-label { padding-top: 4px; font-weight: 600; }
+
+/* Квесты в шторке */
+.ku-dir-quests{display:flex;flex-direction:column;gap:8px}
+.ku-dir-quest{display:flex;flex-direction:column;gap:4px;padding:6px 0;border-top:1px solid color-mix(in srgb,currentColor 14%,transparent)}
+.ku-dir-quest:first-of-type{border-top:0}
+.ku-dir-quest-title{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.ku-dir-quest-step{opacity:.9;overflow-wrap:anywhere}
+
+/* Накал в шторке */
+.ku-heat-bar{height:10px;border-radius:999px;background:color-mix(in srgb,currentColor 14%,transparent);overflow:hidden;margin:4px 0 8px}
+.ku-heat-fill{height:100%;border-radius:999px;background:linear-gradient(90deg,var(--SmartThemeQuoteColor),var(--SmartThemeUnderlineColor));transition:width .2s}

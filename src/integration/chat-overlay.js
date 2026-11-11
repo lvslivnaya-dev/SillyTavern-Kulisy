@@ -15,6 +15,7 @@ const CHIPS_ID = 'ku-scene-chips';
 const LEAK_CLASS = 'ku-leak';
 const SLIP_CLASS = 'ku-slip';
 const DEATH_CLASS = 'ku-death-note-chat';
+const QUEST_HINT_CLASS = 'ku-quest-note-chat';
 const REVEAL_CLASS = 'ku-reveal-note';
 const SECRET_HINT_CLASS = 'ku-secret-hint';
 
@@ -72,7 +73,7 @@ function chipButton(text, action, data = {}, title = '', className = 'ku-dir-btn
  *                  secrets: [{ eventId, label, text }] }
  * eventIdeas() → [text]: today's calendar events, offered as ready scene events.
  */
-export function mountChatOverlay({ onDiceRoll, onDiceToggle, onDiceLock, onDiceAdd, onDiceSend, onDiceClear, onSetTime, onWeather, onSceneMode, onTogglePresent, onLeak, onSlip, onDeath, onReveal, onSecretHint, onOpenStudio,
+export function mountChatOverlay({ onHeat, onQuestHint, onQuestStep, onQuestPush, onDiceRoll, onDiceToggle, onDiceLock, onDiceAdd, onDiceSend, onDiceClear, onSetTime, onWeather, onSceneMode, onTogglePresent, onLeak, onSlip, onDeath, onReveal, onSecretHint, onOpenStudio,
   onCue, onRemoveCue, onKickNow, onToggleOpen, onFavorite, describe, eventIdeas }) {
   // The panel's own state: what is selected and typed survives every re-render.
   const fresh = () => ({ diceAdd: '', diceDraft: '', clock: null, selected: '', pane: '', wait: 0, draft: '', eventDraft: '', sceneDraft: '', noteDraft: '', placeDraft: '', placeId: '', skip: 'none', sceneCast: [] });
@@ -129,6 +130,15 @@ export function mountChatOverlay({ onDiceRoll, onDiceToggle, onDiceLock, onDiceA
       case 'dir-dice-roll': Promise.resolve(onDiceRoll?.({ only: data.group || '' })).then(() => rerender()); return true;
       case 'dir-dice-pick': Promise.resolve(onDiceToggle?.({ group: data.group, option: data.option })).then(() => rerender()); return true;
       case 'dir-dice-lock': Promise.resolve(onDiceLock?.({ group: data.group })).then(() => rerender()); return true;
+      case 'dir-heat': {
+        const payload = data.value !== undefined ? { value: Number(data.value) } : { delta: Number(data.delta) };
+        Promise.resolve(onHeat?.(payload)).then(() => rerender());
+        return true;
+      }
+      case 'dir-heat-lock': Promise.resolve(onHeat?.({ lock: !lastView?.heat?.lock })).then(() => rerender()); return true;
+      case 'dir-heat-clear': Promise.resolve(onHeat?.({ clear: true })).then(() => rerender()); return true;
+      case 'dir-quest-step': Promise.resolve(onQuestStep?.({ questId: data.questId, stepId: data.stepId, done: true })).then(() => rerender()); return true;
+      case 'dir-quest-push': Promise.resolve(onQuestPush?.({ questId: data.questId })).then(() => rerender()); return true;
       case 'dir-dice-send': Promise.resolve(onDiceSend?.()).then(() => rerender()); return true;
       case 'dir-dice-clear': Promise.resolve(onDiceClear?.()).then(() => rerender()); return true;
       case 'dir-dice-add-open': ui.diceAdd = ui.diceAdd === data.group ? '' : data.group; ui.diceDraft = ''; rerender(); return true;
@@ -149,7 +159,7 @@ export function mountChatOverlay({ onDiceRoll, onDiceToggle, onDiceLock, onDiceA
         return true;
       case 'dir-pane':
         ui.pane = ui.pane === data.pane ? '' : data.pane;
-        if (['event', 'others', 'scene', 'note', 'who', 'weather', 'mode', 'time', 'dice'].includes(data.pane)) ui.selected = '';
+        if (['event', 'others', 'scene', 'note', 'who', 'weather', 'mode', 'time', 'dice', 'quests', 'heat'].includes(data.pane)) ui.selected = '';
         if (data.pane === 'time') ui.clock = null;
         rerender();
         return true;
@@ -216,6 +226,7 @@ export function mountChatOverlay({ onDiceRoll, onDiceToggle, onDiceLock, onDiceA
       else if (action === 'studio') onOpenStudio?.(target.dataset.tab);
       else if (action.startsWith('reveal-')) onReveal?.(action.slice(7), { messageIndex: Number(messageIndex), entityId, eventId });
       else if (action.startsWith('secret-')) onSecretHint?.(action.slice(7), { messageIndex: Number(messageIndex), eventId });
+      else if (action.startsWith('quest-')) onQuestHint?.(action.slice(6), { messageIndex: Number(messageIndex), hintId: target.dataset.hintId });
       else if (action.startsWith('death-')) onDeath?.(action.slice(6), { messageIndex: Number(messageIndex), entityId });
       else if (action.startsWith('slip-')) onSlip?.(action.slice(5), { messageIndex: Number(messageIndex), slipIndex: Number(slipIndex) });
       else onLeak(action, { messageIndex: Number(messageIndex), entityId, eventId });
@@ -586,6 +597,8 @@ export function mountChatOverlay({ onDiceRoll, onDiceToggle, onDiceLock, onDiceA
       tile(kindInfo ? kindInfo.icon : '🌤', 'Погода', kindInfo ? `${view.weather.temp != null ? `${view.weather.temp}° ` : ''}${kindInfo.label.toLowerCase()}` : 'не задана', 'dir-pane', { pane: 'weather' }, { on: pane === 'weather', title: 'Погода: выбрать, держать, заготовки' }),
       tile(MODE_MARK[mode], 'Тип', MODE_LABEL[mode], 'dir-pane', { pane: 'mode' }, { on: pane === 'mode', title: 'Тип сцены: от него зависит, какие разделы анкет уходят модели' }),
       ...(mode === 'intim' ? [tile('🎲', 'Кубик', view.dice?.picks?.length ? (view.dice.sent ? 'отправлен' : 'выбрано') : 'бросить', 'dir-pane', { pane: 'dice' }, { on: pane === 'dice', title: 'Кубик близости: чем будет эта сцена' })] : []),
+      tile('🔥', 'Накал', view.heat?.value ? `${view.heat.value} · ${view.heat.label}` : 'спокойно', 'dir-pane', { pane: 'heat' }, { on: pane === 'heat', title: 'Накал сцены: насколько она заряжена. Падает логично, поправить можно рукой' }),
+      tile('🧭', 'Квесты', view.quests?.length ? `${view.quests.length} идут` : 'нет', 'dir-pane', { pane: 'quests' }, { on: pane === 'quests', title: 'Квесты: отметить шаг, ввести его в сюжет' }),
       tile('🎬', 'Сцена', 'новая', 'dir-pane', { pane: 'scene' }, { on: pane === 'scene', title: 'Начать новую сцену: с чего, когда, где и с кем' }),
       tile('⚡', 'Событие', 'случится', 'dir-pane', { pane: 'event' }, { on: pane === 'event', title: 'Пусть в сцене что-то случится' }),
       tile('📝', 'Рассказчику', 'указание', 'dir-pane', { pane: 'note' }, { on: pane === 'note', title: 'Указание на следующий ответ, без персонажа' }),
@@ -602,6 +615,50 @@ export function mountChatOverlay({ onDiceRoll, onDiceToggle, onDiceLock, onDiceA
         row.append(button);
       }
       card.append(row, node('span', 'ku-dir-caption', MODE_HINT[mode]));
+      return card;
+    };
+    const heatCard = () => {
+      const heat = view.heat ?? { value: 0, label: 'спокойно', lock: false, why: '' };
+      const card = node('div', 'ku-dir-card ku-dir-heat');
+      card.append(node('div', 'ku-dir-card-head', `🔥 Накал сцены: ${heat.value} · ${heat.label}`));
+      const bar = node('div', 'ku-heat-bar');
+      bar.setAttribute('role', 'img');
+      bar.setAttribute('aria-label', `Накал ${heat.value} из 100`);
+      const fill = node('div', 'ku-heat-fill');
+      fill.style.width = `${Math.max(0, Math.min(100, heat.value))}%`;
+      bar.append(fill);
+      card.append(bar);
+      if (heat.why) card.append(node('span', 'ku-dir-caption', heat.why));
+      const row = node('div', 'ku-dir-row');
+      for (const delta of [-10, -5, 5, 10]) row.append(chipButton(`${delta > 0 ? '+' : '−'}${Math.abs(delta)}`, 'dir-heat', { delta }, 'Поправить накал', 'ku-dir-btn'));
+      for (const value of [0, 30, 60, 90]) row.append(chipButton(String(value), 'dir-heat', { value }, `Поставить ${value}`, 'ku-dir-btn'));
+      card.append(row);
+      const foot = node('div', 'ku-dir-row');
+      const lock = chipButton(heat.lock ? '🔒 Держу' : '🔓 Держать', 'dir-heat-lock', {}, heat.lock ? 'Летописец накал не трогает: нажмите, чтобы отдать ему' : 'Не давать летописцу менять накал', `ku-dir-btn${heat.lock ? ' on' : ''}`);
+      lock.setAttribute('aria-pressed', String(Boolean(heat.lock)));
+      foot.append(lock, chipButton('Сбросить', 'dir-heat-clear', {}, 'Убрать накал и вернуть его летописцу'));
+      card.append(foot, node('span', 'ku-dir-caption', 'Летописец сам оценивает накал после каждого ответа и снижает его только по причине в сюжете.'));
+      return card;
+    };
+    const questsCard = () => {
+      const card = node('div', 'ku-dir-card ku-dir-quests');
+      card.append(node('div', 'ku-dir-card-head', '🧭 Квесты'));
+      if (!view.quests?.length) card.append(node('span', 'ku-dir-caption', 'Сейчас ничего не идёт. Квесты добавляются на странице «Мир → Квесты».'));
+      for (const quest of view.quests ?? []) {
+        const row = node('div', 'ku-dir-quest');
+        const title = node('div', 'ku-dir-quest-title');
+        title.append(node('b', null, `${quest.secret ? '🔒 ' : ''}${quest.name}`), node('span', 'ku-dir-caption', [quest.progress, quest.due].filter(Boolean).join(' · ')));
+        row.append(title);
+        if (quest.step) row.append(node('span', 'ku-dir-quest-step', quest.step));
+        const buttons = node('div', 'ku-dir-row');
+        if (quest.stepId) buttons.append(chipButton('☑ Шаг выполнен', 'dir-quest-step', { questId: quest.id, stepId: quest.stepId }, 'Отметить текущий шаг сделанным', 'ku-dir-btn'));
+        buttons.append(
+          chipButton('▶ Ввести сейчас', 'dir-quest-push', { questId: quest.id }, 'Следующий ответ подаст этот шаг через сюжет', `ku-dir-btn${quest.pushed ? ' on' : ''}`),
+          chipButton('Открыть', 'studio', { tab: 'quests' }, 'Страница квестов: закрыть, править, награда'),
+        );
+        row.append(buttons);
+        card.append(row);
+      }
       return card;
     };
     const diceCard = () => {
@@ -694,6 +751,8 @@ export function mountChatOverlay({ onDiceRoll, onDiceToggle, onDiceLock, onDiceA
     else if (pane === 'others') parts.push(stage, othersMenu(director));
     else if (pane === 'time') parts.push(timeCard());
     else if (pane === 'dice') parts.push(diceCard());
+    else if (pane === 'quests') parts.push(questsCard());
+    else if (pane === 'heat') parts.push(heatCard());
     else if (pane === 'weather') parts.push(weatherCard());
     else if (pane === 'mode') parts.push(modeCard());
     else if (pane === 'event') parts.push(eventMenu());
@@ -801,6 +860,29 @@ export function mountChatOverlay({ onDiceRoll, onDiceToggle, onDiceLock, onDiceA
     }
   }
 
+  /** The chronicler's guesses about quests: a task taken up, a step done, a quest over. Only proposals. */
+  function renderQuestHints(view) {
+    for (const old of document.querySelectorAll(`#chat .${QUEST_HINT_CLASS}`)) old.remove();
+    for (const hint of view.questHints ?? []) {
+      const block = document.querySelector(`#chat .mes[mesid="${hint.messageIndex}"] .mes_block`);
+      if (!block) continue;
+      const data = { messageIndex: hint.messageIndex, hintId: hint.id };
+      const note = node('div', `${LEAK_CLASS} ${QUEST_HINT_CLASS}`);
+      note.setAttribute('role', 'note');
+      const text = node('div', 'ku-leak-text');
+      text.append(node('i', 'fa-solid fa-flag'), node('b', null, ` ${hint.title} `));
+      if (hint.detail) text.append(node('span', 'ku-leak-quote', hint.detail));
+      const actions = node('div', 'ku-leak-actions');
+      actions.append(
+        actionButton(hint.confirm, 'quest-confirm', data, hint.confirmTitle),
+        actionButton('Нет', 'quest-dismiss', data, 'Убрать отметку, ничего не записывая'),
+      );
+      note.append(text, actions);
+      const anchor = block.querySelector('.mes_text');
+      if (anchor?.nextSibling) block.insertBefore(note, anchor.nextSibling); else block.append(note);
+    }
+  }
+
   function renderDeaths(view) {
     for (const old of document.querySelectorAll(`#chat .${DEATH_CLASS}`)) old.remove();
     for (const death of view.deaths ?? []) {
@@ -852,6 +934,7 @@ export function mountChatOverlay({ onDiceRoll, onDiceToggle, onDiceLock, onDiceA
         renderChips(view);
         renderLeaks(view);
         renderDeaths(view);
+        renderQuestHints(view);
         renderReveals(view);
         renderSecretHints(view);
         renderSlips(view);
@@ -866,6 +949,7 @@ export function mountChatOverlay({ onDiceRoll, onDiceToggle, onDiceLock, onDiceA
       for (const old of document.querySelectorAll(`.${LEAK_CLASS}`)) old.remove();
       for (const old of document.querySelectorAll(`.${SLIP_CLASS}`)) old.remove();
       for (const old of document.querySelectorAll(`.${DEATH_CLASS}`)) old.remove();
+      for (const old of document.querySelectorAll(`.${QUEST_HINT_CLASS}`)) old.remove();
       for (const old of document.querySelectorAll(`.${REVEAL_CLASS}`)) old.remove();
       for (const old of document.querySelectorAll(`.${SECRET_HINT_CLASS}`)) old.remove();
     },

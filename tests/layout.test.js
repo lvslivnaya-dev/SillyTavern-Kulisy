@@ -33,10 +33,10 @@ test('pending tabs are only the new scene pages, never an engine page', () => {
 
 test('stored layout is sanitised', () => {
   const width = DOCK_WIDTH.default;
-  assert.deepEqual(normalizeLayout(undefined), { mode: 'window', tab: DEFAULT_TAB, width, open: false });
-  assert.deepEqual(normalizeLayout({ mode: 'dock', tab: 'journal', width: 700 }), { mode: 'dock', tab: 'journal', width: 700, open: false });
-  assert.deepEqual(normalizeLayout({ mode: 'sideways', tab: 'gone', width: 'wide' }), { mode: 'window', tab: DEFAULT_TAB, width, open: false });
-  assert.deepEqual(normalizeLayout('dock'), { mode: 'window', tab: DEFAULT_TAB, width, open: false });
+  assert.deepEqual(normalizeLayout(undefined), { mode: 'window', tab: DEFAULT_TAB, width, open: false, folded: [] });
+  assert.deepEqual(normalizeLayout({ mode: 'dock', tab: 'journal', width: 700 }), { mode: 'dock', tab: 'journal', width: 700, open: false, folded: [] });
+  assert.deepEqual(normalizeLayout({ mode: 'sideways', tab: 'gone', width: 'wide' }), { mode: 'window', tab: DEFAULT_TAB, width, open: false, folded: [] });
+  assert.deepEqual(normalizeLayout('dock'), { mode: 'window', tab: DEFAULT_TAB, width, open: false, folded: [] });
 });
 
 test('after a reload only the docked panel that was open comes back', () => {
@@ -71,4 +71,9 @@ test('top bar button does not use the class SillyTavern binds to its own drawers
   const mount = shell.slice(shell.indexOf('export function mountTopBarButton'));
   assert.ok(!/className\s*=\s*['"][^'"]*\bdrawer-toggle\b/.test(mount), 'no .drawer-toggle on our button');
   assert.match(mount, /drawer-icon/);
+});
+
+test('folded menu groups: only known ids, no repeats', () => {
+  assert.deepEqual(normalizeLayout({ folded: ['world', 'world', 'nope', 7] }).folded, ['world']);
+  assert.deepEqual(normalizeLayout({ folded: 'world' }).folded, []);
 });

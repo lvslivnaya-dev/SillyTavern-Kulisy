@@ -4,6 +4,8 @@
  * data ever goes into it.
  */
 const PATHS = {
+  chevron: '<path d="m6 9 6 6 6-6"/>',
+  flag: '<path d="M5 21V4M5 4h11l-2 4 2 4H5"/>',
   stage: '<path d="M3 20h18M5 20V9l7-5 7 5v11"/>',
   people: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.5 3.3-5.5 6.5-5.5s5.7 2 6.5 5.5M16 4.5a3.5 3.5 0 0 1 0 7M18 14.6c1.8.7 3 2.6 3.5 5.4"/>',
   alert: '<path d="M12 3l10 18H2z"/><path d="M12 10v5M12 18v.5"/>',

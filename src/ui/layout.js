@@ -20,6 +20,7 @@ export const NAV_GROUPS = Object.freeze([
     ['wardrobe', 'Гардероб', 'shirt'],
     ['calendar', 'Календарь', 'calendar'],
     ['weather', 'Погода', 'cloud'],
+    ['quests', 'Квесты', 'flag'],
     ['dice', 'Кубик', 'dice'],
     ['names', 'Имена', 'tag'],
   ]) }),
@@ -71,7 +72,9 @@ export function normalizeLayout(value) {
   const width = clampDockWidth(source.width ?? DOCK_WIDTH.default);
   // Was the panel open when the page went away? Only the docked panel comes back by
   // itself after a reload: a window over the chat would just be in the way.
-  return { mode, tab, width, open: Boolean(source.open) };
+  // Menu groups the user folded away (only known ids, no repeats).
+  const folded = [...new Set(Array.isArray(source.folded) ? source.folded : [])].filter(id => NAV_GROUPS.some(group => group.id === id));
+  return { mode, tab, width, open: Boolean(source.open), folded };
 }
 
 /** Whether to open the Studio right after the page (re)loads. */

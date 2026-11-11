@@ -7,7 +7,7 @@
  *   time → place → outfits → important things → conditions → features of the place
  *   → ordinary things → the library description of the place → of the things.
  */
-import { activeConditions, currentLocation, locationPath, presentIds, weatherLine } from '../core/index.js';
+import { HEAT_RULE, activeConditions, currentLocation, heatLine, locationPath, presentIds, weatherLine } from '../core/index.js';
 import { effectiveLocation } from './location-links.js';
 import { effectiveItem } from './item-links.js';
 import { cardLabel, wornCards, wornLabel } from '../core/index.js';
@@ -58,6 +58,7 @@ const HAIR_RULE = '- Never take the hair colour from a hairstyle card: use body[
 function rulesFor(lines) {
   let rules = RULES;
   if (lines.some(line => line.weather)) rules += `\n${WEATHER_RULE}`;
+  if (lines.some(line => line.heat)) rules += `\n${HEAT_RULE}`;
   if (lines.some(line => line.hair)) rules += `\n${HAIR_RULE}`;
   return rules;
 }
@@ -82,6 +83,8 @@ export function sceneLines(state, { library = null, reminders = [], wardrobe = n
   }
   // Outdoor weather (core/weather.js weatherFor); a flashback tells about another time.
   if (weather && !clock.flashback) add(2, weatherLine(weather), { weather: true });
+  // How charged the whole scene is (core/heat.js); not while a flashback is told.
+  if (!clock.flashback) add(2, heatLine(state.world?.heat), { heat: true });
   const card = currentLocation(state);
   const place = card ? effectiveLocation(card, library) : null;
   const path = card ? locationPath(state, card.id) : [];
