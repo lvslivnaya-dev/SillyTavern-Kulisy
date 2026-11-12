@@ -925,6 +925,13 @@ test('the closet of a card: sets and things of the wardrobe are ticked, saved wi
     byText('Надеть').click();
     await flush();
     assert.deepEqual(calls.find(call => call[0] === 'onWear')[1], { entityId: 'mikey', cardIds: set.look.cardIds, mode: 'replace' });
+    // Ticking a thing does not move it: the order is the one of the moment the closet was opened.
+    const caps = () => [...shadow.querySelectorAll('.ku-closet-tile .ku-closet-cap')].map(node => node.textContent);
+    const before = caps();
+    [...shadow.querySelectorAll('.ku-closet-tile')][1].click();
+    assert.deepEqual(caps(), before, 'the tiles stay where they were');
+    assert.equal(shadow.querySelectorAll('.ku-closet-tile.on').length, 1);
+    [...shadow.querySelectorAll('.ku-closet-tile')][1].click();
     shadow.querySelector('.ku-closet-tile').click();
     byText('Сохранить').click();
     await flush();

@@ -543,7 +543,7 @@ export function createLibraryPages(ctx) {
   function renderCardEditor(entry) {
     const lib = library();
     const layer = element('div', { className: 'ku-wlayer' });
-    const forget = () => { s.draft = null; s.selSection = ''; };
+    const forget = () => { s.draft = null; s.selSection = ''; s.closetFirst = null; };
     const close = () => { s.openId = ''; forget(); render(); };
     layer.addEventListener('click', event => { if (event.target === layer) close(); });
     const dialog = element('section', { className: 'ku-wcard ku-ccard', role: 'dialog', 'aria-modal': 'true', 'aria-label': entry.name });
@@ -619,7 +619,7 @@ export function createLibraryPages(ctx) {
           element('span', { className: 'ku-cnav-title', text: 'Шкаф' }),
           element('span', { className: 'ku-hint', text: draft.closet.cardIds.length + draft.closet.lookIds.length ? `${draft.closet.lookIds.length} компл. · ${draft.closet.cardIds.length} вещ.` : 'пусто' }),
         ]);
-        row.addEventListener('click', () => { s.selSection = CLOSET; render(); });
+        row.addEventListener('click', () => { s.selSection = CLOSET; s.closetFirst = null; render(); });
         return row;
       })(),
       element('p', { className: 'ku-hint ku-cnavhead', text: `Разделы · ${filled} из ${draft.sections.length}` }),
@@ -702,7 +702,15 @@ export function createLibraryPages(ctx) {
       ] : []),
     ]);
 
+    // Every tick redraws the window: the lists keep where they were scrolled to (per card and section), so nothing jumps to the top.
+    const scrollKey = `${entry.id}:${s.selSection}`;
+    const remember = (node, name) => node.addEventListener('scroll', () => { s.scroll = { ...(s.scroll?.key === scrollKey ? s.scroll : { key: scrollKey }), [name]: node.scrollTop }; });
+    remember(pane, 'pane');
+    remember(nav, 'nav');
+    const restore = () => { if (s.scroll?.key !== scrollKey) return; if (s.scroll.pane) pane.scrollTop = s.scroll.pane; if (s.scroll.nav) nav.scrollTop = s.scroll.nav; };
     dialog.append(top, strip, element('div', { className: 'ku-cbodybox' }, [nav, pane]), foot);
+    queueMicrotask(restore);
+    setTimeout(restore, 0);
     layer.append(dialog);
     if (s.focusedId !== entry.id) {
       s.focusedId = entry.id;
@@ -729,7 +737,10 @@ export function createLibraryPages(ctx) {
 
     // Sets
     const looks = (wardrobe.looks ?? []).filter(look => look.shelf === 'characters' && !look.cardIds.some(another));
-    const sortedLooks = [...looks].sort((left, right) => Number(closet.lookIds.includes(right.id)) - Number(closet.lookIds.includes(left.id)));
+    // Tied ones go first, by what was tied when the closet was opened: ticking something must not move it under the cursor.
+    if (!s.closetFirst || s.closetFirstFor !== entry.id) { s.closetFirst = new Set([...closet.cardIds, ...closet.lookIds]); s.closetFirstFor = entry.id; }
+    const first = id => Number(s.closetFirst.has(id));
+    const sortedLooks = [...looks].sort((left, right) => first(right.id) - first(left.id));
     const lookRows = sortedLooks.map(look => {
       const on = closet.lookIds.includes(look.id);
       const box = element('input', { type: 'checkbox', checked: on, 'aria-label': `Комплект «${look.name}» у героя` });
@@ -749,9 +760,9 @@ export function createLibraryPages(ctx) {
     const all = everything.filter(card => !another(card.id));
     const found = all.filter(card => (!category || card.category === category)
       && (!query || `${cardLabel(card)} ${card.description ?? ''}`.toLocaleLowerCase('ru-RU').includes(query)));
-    found.sort((left, right) => Number(closet.cardIds.includes(right.id)) - Number(closet.cardIds.includes(left.id))
+    found.sort((left, right) => first(right.id) - first(left.id)
       || (order.get(left.category) ?? 99) - (order.get(right.category) ?? 99));
-    const LIMIT = 60;
+    const LIMIT = 120;
     const search = element('input', { type: 'search', value: s.closetQuery ?? '', placeholder: 'Найти вещь', 'aria-label': 'Поиск вещи в гардеробе', className: 'ku-search' });
     search.addEventListener('change', () => { s.closetQuery = search.value; render(); });
     const section = element('select', { 'aria-label': 'Раздел гардероба' }, [
@@ -783,9 +794,11 @@ export function createLibraryPages(ctx) {
       element('p', { className: 'ku-hint', text: 'Что есть у этого героя из «Гардероба». Когда он переодевается в истории, летописец выбирает комплект или вещи отсюда (если подходящего нет, опишет одежду словами). Сами вы тоже можете надеть: кнопки «Надеть». Изменения шкафа сохраняются кнопкой «Сохранить».' }),
       element('div', { className: 'ku-fld' }, [element('label', { className: 'ku-clabel', text: 'Комплекты' }), ...(lookRows.length ? lookRows : [element('p', { className: 'ku-hint', text: 'Комплектов для персонажей пока нет: соберите их в «Гардероб» → образ.' })])]),
       element('div', { className: 'ku-fld' }, [
-        element('div', { className: 'ku-row' }, [element('label', { className: 'ku-clabel', text: 'Вещи' }), element('span', { className: 'ku-push' }), wearAll]),
+        element('div', { className: 'ku-closet-sticky' }, [
+          element('div', { className: 'ku-row' }, [element('label', { className: 'ku-clabel', text: 'Вещи' }), element('span', { className: 'ku-push' }), wearAll]),
+          element('div', { className: 'ku-row' }, [search, section]),
+        ]),
         ...(own.length ? [element('details', { className: 'ku-cmore' }, [element('summary', { text: `Личные вещи: отметьте, что принадлежит только этому герою (${closet.ownIds.length} из ${own.length})` }), ...own, element('p', { className: 'ku-hint', text: 'Личную вещь не увидят в шкафах других героев, и летописец не наденет её на других. Метка снимается тем же флажком.' })])] : []),
-        element('div', { className: 'ku-row' }, [search, section]),
         found.length ? tiles : element('p', { className: 'ku-hint', text: all.length ? 'Ничего не найдено.' : 'В гардеробе (полка «Персонажи») пока нет вещей.' }),
         ...(hidden ? [element('p', { className: 'ku-hint', text: `Скрыто вещей, которые личные у других героев: ${hidden}.` })] : []),
         ...(found.length > LIMIT ? [element('p', { className: 'ku-hint', text: `Показано ${LIMIT} из ${found.length}: уточните поиск или раздел.` })] : []),
@@ -1161,11 +1174,12 @@ export const LIBRARY_STYLE = `
 .ku-closet-name{flex:1 1 auto;min-width:0}
 .ku-closet-own{position:absolute;top:6px;left:6px;padding:1px 7px;border-radius:20px;background:var(--k-accent);color:var(--k-bg);font-size:10.5px}
 .ku-closet-tile{position:relative}
-.ku-closet-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(96px,1fr));gap:8px;margin-top:8px}
+.ku-closet-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(132px,1fr));gap:10px;margin-top:8px}
+.ku-closet-sticky{position:sticky;top:-22px;z-index:2;padding:8px 0;background:var(--k-panel);display:flex;flex-direction:column;gap:8px}
 .ku-closet-tile{display:flex;flex-direction:column;gap:4px;padding:4px;border:2px solid transparent;border-radius:10px;background:var(--k-inset);color:var(--k-text);cursor:pointer;text-align:center;font:inherit}
 .ku-closet-tile.on{border-color:var(--k-accent)}
 .ku-closet-tile img,.ku-closet-noimg{width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;display:flex;align-items:center;justify-content:center;background:var(--k-track)}
-.ku-closet-cap{font-size:11.5px;line-height:1.25;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.ku-closet-cap{font-size:12.5px;line-height:1.25;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
 .ku-pickbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 10px;margin:6px 0;border:1px solid var(--k-accent);border-radius:10px;background:var(--k-inset)}
 .ku-pickbox{margin:0 8px 0 0;flex:0 0 auto;pointer-events:none}
 .ku-place-card.picked{outline:2px solid var(--k-accent)}

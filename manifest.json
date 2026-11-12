@@ -5,7 +5,7 @@
   "css": "style.css",
   "generate_interceptor": "kulisyInterceptor",
   "author": "Слива & Hugh",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "homePage": "https://github.com/lvslivnaya-dev/SillyTavern-Kulisy",
   "minimum_client_version": "1.19.0",
   "auto_update": true,

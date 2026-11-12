@@ -11,7 +11,7 @@ export const CHRONICLE_PROMPT_KEY = 'kulisy-chronicle';
 /** The scene block (time, place, clothes, things), next to the knowledge block. */
 export const SCENE_PROMPT_KEY = 'kulisy-scene';
 /** Shown on the strip: which code the page really runs (a stale browser cache is the first thing to rule out). */
-export const KULISY_BUILD = '0.1.8';
+export const KULISY_BUILD = '0.1.9';
 /** Extension prompt key of the story calendar (today's events, what is coming). */
 export const CALENDAR_PROMPT_KEY = 'kulisy-calendar';
 /** The user's stage directions («пнуть» a character) for the coming reply only. */
