@@ -11,7 +11,7 @@ export const CHRONICLE_PROMPT_KEY = 'kulisy-chronicle';
 /** The scene block (time, place, clothes, things), next to the knowledge block. */
 export const SCENE_PROMPT_KEY = 'kulisy-scene';
 /** Shown on the strip: which code the page really runs (a stale browser cache is the first thing to rule out). */
-export const KULISY_BUILD = '0.1.7';
+export const KULISY_BUILD = '0.1.8';
 /** Extension prompt key of the story calendar (today's events, what is coming). */
 export const CALENDAR_PROMPT_KEY = 'kulisy-calendar';
 /** The user's stage directions («пнуть» a character) for the coming reply only. */
@@ -54,7 +54,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   // Library character cards (card-prompt.js): send their sections, and take the same character's lorebook sheet out so nothing goes twice.
   sendCards: true,
   cardsReplaceLore: true,
-  cardsPromptCharacters: 6000,
+  cardsPromptCharacters: 12000,
   // Weather line in the scene block (core/weather.js).
   sendWeather: true,
   // Calendar templates, shared by all chats (core/calendar.js toTemplate).
@@ -103,6 +103,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   },
   // The scene panel above the message box: who is on stage, and the stage directions («пнуть»).
   sceneChips: true,
+  // The reminder above the message box: «set Kulisy up for this chat» (core/setup-guide.js), while a required step is open.
+  setupReminder: true,
   // The panel is a drawer: open stays open until its arrow is clicked. silenceAfter: replies
   // without a word from someone on stage before their chip shows 💤 (0 = never).
   // hotkeys: Alt+1…9 kicks the n-th character on stage.
@@ -173,6 +175,8 @@ export function getSettings(context) {
   mergeMissing(settings, DEFAULT_SETTINGS);
   // 2400 was the old built-in limit and was never editable, so it is never a user's choice.
   if (settings.maxPromptCharacters === 2400) settings.maxPromptCharacters = DEFAULT_SETTINGS.maxPromptCharacters;
+  // 6000 was the first default of the cards block: one whole questionnaire is about 10 000 characters, so it was never a choice.
+  if (settings.cardsPromptCharacters === 6000) settings.cardsPromptCharacters = DEFAULT_SETTINGS.cardsPromptCharacters;
   return settings;
 }
 

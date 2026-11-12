@@ -917,6 +917,7 @@ test('the closet of a card: sets and things of the wardrobe are ticked, saved wi
   const flush = () => new Promise(resolve => setTimeout(resolve, 0));
   try {
     shadow.querySelector('.ku-place-open').click();
+    assert.ok(shadow.querySelector('.ku-cnav').textContent.startsWith('Шкаф'), 'the closet is the first row of the list: it must not hide below the sections');
     [...shadow.querySelectorAll('.ku-cnav')].find(node => node.textContent.startsWith('Шкаф')).click();
     assert.match(shadow.querySelector('.ku-cpane').textContent, /Комплекты[\s\S]*Форма[\s\S]*Вещи/);
     shadow.querySelector('input[aria-label="Комплект «Форма» у героя"]').click();

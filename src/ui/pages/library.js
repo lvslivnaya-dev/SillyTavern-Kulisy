@@ -613,6 +613,15 @@ export function createLibraryPages(ctx) {
     // ---- The list of sections (left)
     const filled = draft.sections.filter(section => section.text.trim()).length;
     const nav = element('nav', { className: 'ku-cnavbox', 'aria-label': 'Разделы карточки' }, [
+      element('p', { className: 'ku-hint ku-cnavhead', text: 'Одежда героя' }),
+      (() => {
+        const row = element('button', { type: 'button', className: `ku-cnav${s.selSection === CLOSET ? ' on' : ''}`, 'aria-current': s.selSection === CLOSET ? 'true' : null }, [
+          element('span', { className: 'ku-cnav-title', text: 'Шкаф' }),
+          element('span', { className: 'ku-hint', text: draft.closet.cardIds.length + draft.closet.lookIds.length ? `${draft.closet.lookIds.length} компл. · ${draft.closet.cardIds.length} вещ.` : 'пусто' }),
+        ]);
+        row.addEventListener('click', () => { s.selSection = CLOSET; render(); });
+        return row;
+      })(),
       element('p', { className: 'ku-hint ku-cnavhead', text: `Разделы · ${filled} из ${draft.sections.length}` }),
       ...draft.sections.map(section => {
         const length = section.text.trim().length;
@@ -625,14 +634,6 @@ export function createLibraryPages(ctx) {
         return row;
       }),
       element('span', { className: 'ku-push' }),
-      (() => {
-        const row = element('button', { type: 'button', className: `ku-cnav${s.selSection === CLOSET ? ' on' : ''}`, 'aria-current': s.selSection === CLOSET ? 'true' : null }, [
-          element('span', { className: 'ku-cnav-title', text: 'Шкаф' }),
-          element('span', { className: 'ku-hint', text: draft.closet.cardIds.length + draft.closet.lookIds.length ? `${draft.closet.lookIds.length} компл. · ${draft.closet.cardIds.length} вещ.` : 'пусто' }),
-        ]);
-        row.addEventListener('click', () => { s.selSection = CLOSET; render(); });
-        return row;
-      })(),
       button('+ Свой раздел', 'btn small', () => {
         const created = makeSection({ kind: 'other', title: 'Новый раздел', text: '' });
         draft.sections.push(created);
@@ -799,7 +800,10 @@ export function createLibraryPages(ctx) {
     const kindLabel = key => (key === 'other' ? 'Прочее (по ключевым словам)' : CARD_SECTION_KINDS[key]);
     const chip = !own ? null : own.action === 'force'
       ? element('span', { className: 'ku-chip told', text: 'сейчас уходит в запрос' })
-      : element('span', { className: 'ku-chip', text: own.action === 'trim' ? 'не влезло в объём' : `сейчас придержан${own.why ? `: ${own.why}` : ''}` });
+      : element('span', { className: 'ku-chip', title: own.action === 'trim' ? 'Блок «Карточки» упёрся в лимит объёма' : '', text: own.action === 'trim' ? 'не влезло в лимит объёма' : `сейчас придержан${own.why ? `: ${own.why}` : ''}` });
+    const trimmedNote = own?.action === 'trim'
+      ? element('p', { className: 'ku-hint', text: `Сейчас этот раздел не уходит рассказчику: все карточки вместе упёрлись в лимит ${snapshot().settings?.cardsPromptCharacters ?? 12000} знаков (в запрос идут те, кто в сцене, и только нужные разделы). Лимит меняется в «Настройки → Знания и сцена → Карточки → Объём карточек, символов» (до 20000). Английский текст короче русского, а целая анкета — около 10 000 знаков.` })
+      : null;
 
     const count = element('p', { className: 'ku-hint' });
     const showCount = () => { count.textContent = `Что рассказчик должен знать об этом: факты, привычки, как говорит. Пустой раздел в запрос не уходит. Сейчас ${section.text.trim().length} зн.`; };
@@ -870,6 +874,7 @@ export function createLibraryPages(ctx) {
 
     return element('div', { className: 'ku-cpane' }, [
       element('div', { className: 'ku-ctitlerow' }, [element('h3', { className: 'ku-ctitle', text: section.title || CARD_SECTION_KINDS[section.kind] }), ...(chip ? [chip] : [])]),
+      ...(trimmedNote ? [trimmedNote] : []),
       element('div', { className: 'ku-fld' }, [element('label', { className: 'ku-clabel', htmlFor: 'ku-card-text', text: 'Текст раздела' }), text, count]),
       whenBox,
       element('div', { className: 'ku-fld' }, [element('label', { className: 'ku-clabel', htmlFor: 'ku-card-keys', text: 'Ключевые слова' }), keys, regexRow, element('p', { className: 'ku-hint', text: byKeys ? 'Раздел попадёт в запрос, только если одно из этих слов встретится в вашем последнем посте или в предыдущем ответе. Каждое слово с новой строки (или через запятую). Без слов такой раздел не уйдёт никогда. Обычное слово находится и внутри других слов («байк» найдёт и «байкер»); «Надеть регекс» делает поиск точнее: только слово с окончаниями, только целиком или любое начинающееся так. Свой регекс можно писать вручную: /байк(а|у)?/i.' : 'Поле работает, когда правило раздела — «по ключевым словам». Сейчас у раздела другое правило, слова не нужны: выберите «Своё правило» → «по ключевым словам» выше.' })]),

@@ -361,6 +361,11 @@
 #ku-scene-chips .ku-dice-foot { position: sticky; bottom: -10px; padding: 8px 0 4px; background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 100%, transparent); border-top: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 60%, transparent); }
 #ku-scene-chips .ku-dice-chip.ahead { border-style: dashed; opacity: .8; }
 
+/* The reminder to set Kulisy up for this chat (above the message box). */
+.ku-setup-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; width: calc(100% - 12px); box-sizing: border-box; margin: 0 6px 4px; padding: 6px 12px; border: 1px solid var(--SmartThemeQuoteColor); border-radius: 10px; background: color-mix(in srgb, var(--SmartThemeQuoteColor) 14%, var(--SmartThemeBlurTintColor)); font-size: .92em; }
+.ku-setup-banner .ku-sb-text { flex: 1 1 220px; min-width: 0; }
+.ku-setup-banner .ku-sb-go { font-weight: 600; }
+
 /* The strip above the message box: the scene in one glance and what goes to the model with the next post. */
 .ku-scene-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; width: calc(100% - 12px); box-sizing: border-box; margin: 0 6px 4px; padding: 4px 12px; border: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 80%, transparent); border-radius: 12px; background: color-mix(in srgb, var(--SmartThemeBlurTintColor) 92%, transparent); backdrop-filter: blur(var(--SmartThemeBlurStrength, 10px)); color: var(--SmartThemeBodyColor); font: inherit; font-size: calc(var(--mainFontSize) * 0.8); text-align: left; cursor: pointer; }
 .ku-scene-strip:hover { background: color-mix(in srgb, var(--SmartThemeQuoteColor) 12%, var(--SmartThemeBlurTintColor)); }

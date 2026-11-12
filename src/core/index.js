@@ -41,6 +41,7 @@ export {
   normalizeCalendar, normalizeEvent, normalizeTemplates, occursOn, parseDate, shortDate, toTemplate, upcoming, weekdayOf,
 } from './calendar.js';
 export { LORE_SECRET_LIMITS, cleanSecretText, isSecretEntry, loreSecretEvent, parseSecretMark, secretEntriesOf, stripSecretEntries } from './lore-secrets.js';
+export { SETUP_STEPS, setupProgress, setupReminderDue, setupSteps } from './setup-guide.js';
 export { KNOWLEDGE_PROMPT_DEFAULTS, KNOWLEDGE_RULES, buildKnowledgePrompt, selectKnowledgeLines } from './knowledge-prompt.js';
 export {
   WARDROBE_CATEGORIES, WARDROBE_GENDERS, WARDROBE_LIMITS, WARDROBE_SHELVES, WARDROBE_VERSION, addCard, addLook, addToWorn, cardLabel, cardsOf, cleanImagePath,

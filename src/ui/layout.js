@@ -34,6 +34,7 @@ export const NAV_GROUPS = Object.freeze([
     ['triangles', 'Треугольники', 'triangle'],
   ]) }),
   Object.freeze({ id: 'system', title: 'Система', items: Object.freeze([
+    ['setup', 'Настройка чата', 'check'],
     ['journal', 'История', 'history'],
     ['lorebooks', 'Лорбуки', 'book'],
     ['leaks', 'Проверка', 'alert'],

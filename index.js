@@ -68,8 +68,12 @@ import {
   buildNamesPrompt,
   addSong, addSongFolder, importSongs, muteSong, normalizeSongState, normalizeSongs, pinSong, planSongs, recentText, removeSongFolder, removeSongs, unmuteSong, unpinSong, updateSong, updateSongFolder,
   INTIMACY_STAGES, aheadGroups, stageOf, heatLevel, buildQuestsPrompt, cleanShifts, closingLine, closingShifts, currentStep, groupQuests, progressOf, questCue, questId, questsOf, dueText, daysLeft, QUEST_STATUSES,
+  currentLocation,
   normalizeNames,
   personalPieces,
+  setupProgress,
+  setupReminderDue,
+  setupSteps,
   recognitionForms,
   removeName,
   updateName,
@@ -159,7 +163,7 @@ function messageMarker(message) {
   return message?.extra?.[MESSAGE_EXTRA_KEY] ?? message?.extra?.[LEGACY_MESSAGE_EXTRA_KEY];
 }
 /** Plain on/off preferences edited as checkboxes in the Studio settings. */
-const TOGGLE_SETTINGS = ['linkedScales', 'autoCharacterLines', 'confirmPersonaLines', 'sendMemories', 'sendTensions', 'sendFactors', 'sendHeadcanons', 'autoHeadcanons', 'trackKnowledge', 'trackWorld', 'sendScene', 'sendCalendar', 'sendQuests', 'sendCards', 'cardsReplaceLore', 'injectPrompt', 'confirmLargeChanges', 'knowledgeSeparateRequest', 'sendKnowledge', 'sceneChips'];
+const TOGGLE_SETTINGS = ['linkedScales', 'autoCharacterLines', 'confirmPersonaLines', 'sendMemories', 'sendTensions', 'sendFactors', 'sendHeadcanons', 'autoHeadcanons', 'trackKnowledge', 'trackWorld', 'sendScene', 'sendCalendar', 'sendQuests', 'sendCards', 'cardsReplaceLore', 'injectPrompt', 'confirmLargeChanges', 'knowledgeSeparateRequest', 'sendKnowledge', 'sceneChips', 'setupReminder'];
 let controller = null;
 
 function normalizeEmbeddings(config) {
@@ -330,6 +334,7 @@ export async function init() {
       questToday: state.world?.clock?.day ?? 0,
       questSecretsHidden: settings.sendQuests === false,
       namesChatOff: Boolean(state.ui?.namesOff),
+      setup: setupSnapshot(),
       namesTokens,
       calendarTokens,
       reveals: openReveals(),
@@ -733,7 +738,7 @@ export async function init() {
           turn: (ctx.chat ?? []).filter(message => message?.is_user && !message.is_system).length,
           tracker: cardTracker,
           extraNames: cardNameForms(state, locationLibrary.get(), normalizeNames(settings.nameLibrary), recognitionForms),
-          maxCharacters: Math.max(500, Math.min(20000, Number(settings.cardsPromptCharacters) || 6000)),
+          maxCharacters: Math.max(500, Math.min(20000, Number(settings.cardsPromptCharacters) || 12000)),
           ...gateTexts(ctx.chat),
         });
         cardsBlock = planned.block;
@@ -1369,6 +1374,33 @@ ${replyText}` });
   };
 
   /** The song library (Мир → Песни): shared by all chats, kept in the settings; the chat only pins and mutes songs (onSongChat). */
+  /** The setup guide of this chat (core/setup-guide.js): the steps with their state, and whether the reminder is switched off here. */
+  function setupSnapshot() {
+    const personaId = state.ui?.personaId || '';
+    const facts = {
+      enabled: settings.enabled,
+      personaId,
+      characters: Object.values(state.entities ?? {}).filter(entity => entity.id !== personaId).length,
+      libraryCards: (locationLibrary.get().characters ?? []).length,
+      cardsOn: cardsByEntity(state, locationLibrary.get()).size,
+      lorebooks: (state.ui?.linkedLorebooks ?? []).length,
+      hasPlace: Boolean(currentLocation(state)),
+      auxMode: settings.aux?.mode ?? 'off',
+    };
+    const steps = setupSteps(facts);
+    return { steps, progress: setupProgress(steps), off: Boolean(state.ui?.setupOff), remind: settings.setupReminder !== false, enabled: Boolean(settings.enabled) };
+  }
+
+  /** «Не напоминать в этом чате» (and back): kept with the chat, never part of the story. */
+  const setupCallbacks = {
+    onSetupOff: ({ off }) => {
+      const next = structuredClone(state);
+      next.ui ??= {};
+      if (off) next.ui.setupOff = true; else delete next.ui.setupOff;
+      return commit(next, true);
+    },
+  };
+
   const songsCallbacks = {
     onSongAdd: ({ title, artist, folderId }) => {
       let made = null;
@@ -2636,6 +2668,7 @@ ${card.personality ?? card.data?.personality ?? ''}`;
     ...calendarCallbacks,
     ...namesCallbacks,
     ...songsCallbacks,
+    ...setupCallbacks,
     ...weatherCallbacks,
     ...diceCallbacks,
     ...questCallbacks,
@@ -3833,6 +3866,7 @@ ${card.personality ?? card.data?.personality ?? ''}`;
     const nameOf = id => state.entities[id]?.name ?? id;
     const director = settings.director ?? {};
     return {
+      setup: (() => { const setup = setupSnapshot(); return { due: setupReminderDue({ enabled: setup.enabled, remind: setup.remind, off: setup.off }, setup.progress), done: setup.progress.done, total: setup.progress.total, chat: String(SillyTavern.getContext().chatId ?? '') }; })(),
       chips: settings.enabled && settings.sceneChips !== false,
       cast: ids.map(id => ({ id, name: state.entities[id].name, present: here.has(id), persona: id === personaId, silent: silent.get(id) ?? 0 })),
       director: {
@@ -3921,6 +3955,7 @@ ${card.personality ?? card.data?.personality ?? ''}`;
         .catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы'));
     },
     onOpenStudio: tab => (tab ? studio.show(tab) : studio.open()),
+    onSetupOff: () => setupCallbacks.onSetupOff({ off: true }).catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
     onCue: async cue => {
       try {
         if (!settings.enabled) throw new Error('Кулисы выключены.');

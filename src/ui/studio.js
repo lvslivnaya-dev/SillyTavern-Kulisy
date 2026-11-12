@@ -22,6 +22,7 @@ import { CALENDAR_STYLE, createCalendarPages } from './pages/calendar.js';
 import { CALENDAR_BUILDER_STYLE } from './pages/calendar-builder.js';
 import { NAMES_STYLE, createNamesPages } from './pages/names.js';
 import { SONGS_STYLE, createSongsPages } from './pages/songs.js';
+import { SETUP_STYLE, createSetupPage } from './pages/setup.js';
 import { WEATHER_STYLE, createWeatherPages } from './pages/weather.js';
 import { DICE_STYLE, createDicePages } from './pages/dice.js';
 import { QUESTS_STYLE, createQuestsPages } from './pages/quests.js';
@@ -37,7 +38,7 @@ const TABS = NAV_TABS;
 const PAGE_TITLES = Object.freeze({
   scene: 'Сейчас', characters: 'Персонажи', persona: 'Персона', leaks: 'Проверка ответов', events: 'Лента событий', secrets: 'Секреты',
   chronicle: 'Хроника', places: 'Локации', items: 'Вещи', cards: 'Карточки персонажей', wardrobe: 'Гардероб', calendar: 'Календарь',
-  weather: 'Погода', dice: 'Кубик близости', names: 'Имена', songs: 'Песни', quests: 'Квесты',
+  weather: 'Погода', dice: 'Кубик близости', names: 'Имена', songs: 'Песни', quests: 'Квесты', setup: 'Настройка чата',
   overview: 'Все отношения', headcanons: 'Хедканоны отношений',
   journal: 'История изменений', lorebooks: 'Подключённые лорбуки', settings: 'Настройки',
 });
@@ -61,7 +62,7 @@ export function createRelationshipStudio(options = {}) {
   let triangleSetupId = null; // triangle whose setup sheet is open in the factors layer
   const isPhone = () => typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 760px)').matches;
 
-  const style = element('style', { text: STYLE + KNOWLEDGE_STYLE + SETTINGS_STYLE + WORLD_STYLE + WARDROBE_STYLE + LIBRARY_STYLE + CALENDAR_STYLE + CALENDAR_BUILDER_STYLE + NAMES_STYLE + SONGS_STYLE + WEATHER_STYLE + DICE_STYLE + QUESTS_STYLE + `
+  const style = element('style', { text: STYLE + KNOWLEDGE_STYLE + SETTINGS_STYLE + WORLD_STYLE + WARDROBE_STYLE + LIBRARY_STYLE + CALENDAR_STYLE + CALENDAR_BUILDER_STYLE + NAMES_STYLE + SONGS_STYLE + SETUP_STYLE + WEATHER_STYLE + DICE_STYLE + QUESTS_STYLE + `
     .relationship-card{min-width:0;overflow:hidden}.relationship-card .grid{display:flex;flex-direction:column;gap:14px}.relationship-card .card{min-width:0;width:100%;position:static;grid-area:auto}.relationship-card .metric{grid-template-columns:minmax(80px,110px) minmax(0,1fr) 42px}.relationship-card input[type=range]{min-width:0;width:100%}.item p{overflow-wrap:anywhere}.chips{display:flex;flex-wrap:wrap;gap:6px;margin:12px 0}.chips .active{border-color:var(--rs-accent)}.triangle-edges{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:12px}.header{flex-wrap:wrap}
     input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:20px;background:transparent;cursor:pointer;accent-color:var(--rs-accent)}
     input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:4px;background:var(--rs-track);border:1px solid var(--rs-line)}
@@ -720,7 +721,7 @@ export function createRelationshipStudio(options = {}) {
       ...(tab === 'overview' ? [element('span', { className: 'muted', text: 'Направление важно: обратная связь редактируется отдельно.' })] : []),
     ]);
     content.append(hero);
-    const knowledgePage = { scene: renderNow, characters: renderCharacters, events: renderEvents, secrets: renderSecrets, persona: renderPersonaPage, leaks: renderChecks, chronicle: renderChronicle, places: renderPlaces, items: renderItems, cards: renderCards, wardrobe: renderWardrobe, calendar: renderCalendar, names: renderNames, songs: renderSongs, weather: renderWeather, dice: renderDice, quests: renderQuests }[tab];
+    const knowledgePage = { scene: renderNow, characters: renderCharacters, events: renderEvents, secrets: renderSecrets, persona: renderPersonaPage, leaks: renderChecks, chronicle: renderChronicle, places: renderPlaces, items: renderItems, cards: renderCards, wardrobe: renderWardrobe, calendar: renderCalendar, names: renderNames, songs: renderSongs, weather: renderWeather, dice: renderDice, quests: renderQuests, setup: renderSetup }[tab];
     if (knowledgePage) {
       content.append(knowledgePage());
       return content;
@@ -801,13 +802,13 @@ export function createRelationshipStudio(options = {}) {
     get triangleSetupId() { return triangleSetupId; },
     set triangleSetupId(value) { triangleSetupId = value; },
   };
-  for (const create of [createDialogs, createCharactersPage, createOverviewPage, createRecordsPage, createHeadcanonsPage, createTrianglesPage, createSystemPages, createKnowledgePages, createWorldPages, createWardrobePages, createLibraryPages, createCalendarPages, createNamesPages, createSongsPages, createWeatherPages, createDicePages, createQuestsPages]) Object.assign(ctx, create(ctx));
+  for (const create of [createDialogs, createCharactersPage, createOverviewPage, createRecordsPage, createHeadcanonsPage, createTrianglesPage, createSystemPages, createKnowledgePages, createWorldPages, createWardrobePages, createLibraryPages, createCalendarPages, createNamesPages, createSongsPages, createSetupPage, createWeatherPages, createDicePages, createQuestsPages]) Object.assign(ctx, create(ctx));
   cleanups.push(() => ctx.destroyWardrobe?.(), () => ctx.destroyLibrary?.());
   const {
     renderFactorsDialog, renderTriangleDialog, renderAllRelationships, renderCollection, renderJournal,
     renderLorebooks, renderTriangles, renderHeadcanons, renderSettings,
     renderCharacters, renderEvents, renderSecrets,
-    renderNow, renderPlaces, renderItems, renderCards, renderChronicle, renderChecks, renderWardrobe, renderCalendar, renderNames, renderSongs, renderWeather, renderDice, renderQuests,
+    renderNow, renderPlaces, renderItems, renderCards, renderChronicle, renderChecks, renderWardrobe, renderCalendar, renderNames, renderSongs, renderSetup, renderWeather, renderDice, renderQuests,
   } = ctx;
 
   document.addEventListener('keydown', onKeyDown);

@@ -13,6 +13,7 @@
  */
 const CHIPS_ID = 'ku-scene-chips';
 const STRIP_ID = 'ku-scene-strip';
+const SETUP_ID = 'ku-setup-banner';
 
 const LEAK_CLASS = 'ku-leak';
 const SLIP_CLASS = 'ku-slip';
@@ -75,12 +76,13 @@ function chipButton(text, action, data = {}, title = '', className = 'ku-dir-btn
  *                  secrets: [{ eventId, label, text }] }
  * eventIdeas() → [text]: today's calendar events, offered as ready scene events.
  */
-export function mountChatOverlay({ onDiceRelease, onStage, onHeat, onQuestHint, onQuestStep, onSong, onQuestPush, onDiceRoll, onDiceToggle, onDiceLock, onDiceAdd, onDiceSend, onDiceClear, onSetTime, onWeather, onSceneMode, onTogglePresent, onLeak, onSlip, onDeath, onReveal, onSecretHint, onOpenStudio,
+export function mountChatOverlay({ onDiceRelease, onStage, onHeat, onQuestHint, onQuestStep, onSong, onQuestPush, onDiceRoll, onDiceToggle, onDiceLock, onDiceAdd, onDiceSend, onDiceClear, onSetTime, onWeather, onSceneMode, onTogglePresent, onLeak, onSlip, onDeath, onReveal, onSecretHint, onOpenStudio, onSetupOff,
   onCue, onRemoveCue, onKickNow, onToggleOpen, onFavorite, describe, eventIdeas }) {
   // The panel's own state: what is selected and typed survives every re-render.
   const fresh = () => ({ stageNote: null, diceAdd: '', diceDraft: '', clock: null, selected: '', pane: '', wait: 0, draft: '', eventDraft: '', sceneDraft: '', noteDraft: '', placeDraft: '', placeId: '', skip: 'none', sceneCast: [], songFind: '' });
   const ui = fresh();
   let lastView = null;
+  const snoozed = new Set(); // chats whose setup reminder was put off until the page is reloaded
   let lastMenu = null;
 
   const resetMenu = () => Object.assign(ui, fresh());
@@ -245,6 +247,8 @@ export function mountChatOverlay({ onDiceRelease, onStage, onHeat, onQuestHint, 
       if (action.startsWith('dir-')) directorAction(action, target.dataset);
       else if (action === 'present') onTogglePresent(entityId, target.dataset.present !== 'true');
       else if (action === 'studio') onOpenStudio?.(target.dataset.tab);
+      else if (action === 'setup-later') { snoozed.add(target.dataset.chat ?? ''); if (lastView) renderSetupBanner(lastView); }
+      else if (action === 'setup-off') onSetupOff?.();
       else if (action.startsWith('reveal-')) onReveal?.(action.slice(7), { messageIndex: Number(messageIndex), entityId, eventId });
       else if (action.startsWith('secret-')) onSecretHint?.(action.slice(7), { messageIndex: Number(messageIndex), eventId });
       else if (action.startsWith('quest-')) onQuestHint?.(action.slice(6), { messageIndex: Number(messageIndex), hintId: target.dataset.hintId });
@@ -663,6 +667,29 @@ export function mountChatOverlay({ onDiceRelease, onStage, onHeat, onQuestHint, 
     }
     if (view.build) parts.push(node('span', 'ku-ss-ver', `Кулисы ${view.build}`));
     strip.replaceChildren(...parts);
+  }
+
+  /**
+   * The reminder above the message box in a chat that Kulisy has not been set up for (view.setup = { due, done, total, chat }):
+   * a link to the step-by-step guide, «Позже» (until the page is reloaded) and «Не напоминать в этом чате».
+   */
+  function renderSetupBanner(view) {
+    let banner = document.getElementById(SETUP_ID);
+    const setup = view.setup;
+    if (!setup?.due || snoozed.has(setup.chat)) { banner?.remove(); return; }
+    const form = document.getElementById('send_form');
+    if (!form?.parentElement) return;
+    if (!banner) {
+      banner = node('div', 'ku-setup-banner');
+      banner.id = SETUP_ID;
+      form.parentElement.insertBefore(banner, form);
+    }
+    banner.replaceChildren(
+      node('span', 'ku-sb-text', `Кулисы: этот чат ещё не настроен (обязательных шагов ${setup.done} из ${setup.total}).`),
+      chipButton('Пошаговая инструкция', 'studio', { tab: 'setup' }, 'Открыть «Настройка чата»: что нажать и зачем', 'ku-dir-btn ku-sb-go'),
+      chipButton('Позже', 'setup-later', { chat: setup.chat }, 'Скрыть до перезагрузки страницы'),
+      chipButton('Не напоминать здесь', 'setup-off', {}, 'Больше не показывать плашку в этом чате'),
+    );
   }
 
   /** The drawer: a slim bar when closed; opened, it stays until its arrow is clicked. */
@@ -1112,6 +1139,7 @@ export function mountChatOverlay({ onDiceRelease, onStage, onHeat, onQuestHint, 
     render(view) {
       lastView = view;
       try {
+        renderSetupBanner(view);
         renderChips(view);
         renderStrip(view);
         renderLeaks(view);

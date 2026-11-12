@@ -19,7 +19,7 @@ import { cardsByEntity } from './card-links.js';
 import { entryIsAbout } from './name-sources.js';
 import { isSecretEntry } from '../core/lore-secrets.js';
 
-export const CARDS_PROMPT_DEFAULTS = Object.freeze({ maxCharacters: 6000 });
+export const CARDS_PROMPT_DEFAULTS = Object.freeze({ maxCharacters: 12000 });
 export const CARDS_RULES = [
   '- Each sheet is established canon of the character named in its header. It belongs to that character only: never give their traits, voice or history to {{user}} or to anyone else.',
   '- A section that is not shown now is not cancelled: keep what the story has already shown about it, and do not invent anything that contradicts the sheets.',
