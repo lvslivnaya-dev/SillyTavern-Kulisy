@@ -161,3 +161,74 @@ test('a thinking model: the reasoning is dropped, the last JSON answer is taken'
 test('the JSON template quoted in the reasoning ("...") is not taken as the answer', () => {
   assert.throws(() => parseDescription('The JSON: `{"name":"...", "gender":"...", "description":"..."}`. Now: {"name":"Ху'), /размышления/);
 });
+
+test('a closet tied to a character: the chronicler sees what they own and may put those pieces on; nothing outside the closet is put on', () => {
+  const { wardrobe, jacket, pants, band, look } = closet();
+  const tied = { ...wardrobe, closets: { [mikey.id]: { cardIds: [pants.id, band.id], lookIds: [look.id] } } };
+  const state = chat();
+  const block = buildWorldBlock(state, 'Майки', null, tied);
+  assert.ok(block.includes(`: looks [${look.id}: Форма Тосвы] | pieces [${pants.id}: Широкие штаны; ${band.id}: Повязка на руку]`));
+  assert.match(block, /Closets \(what each/);
+  assert.equal(block.includes(`pieces [${jacket.id}`) || block.split('pieces [')[1].includes(jacket.id), false, 'a piece that is not tied is not in the closet');
+  assert.doesNotMatch(buildWorldBlock(state, 'Майки', null, wardrobe), /Closets/, 'no closet: no block');
+
+  // Pieces from the closet are put on, with no words about the outfit at all.
+  const dress = (ids, withCloset) => applyAnalysisResult(state, { operations: [], world: parseWorld({ outfits: [{ entityId: mikey.id, cardIds: ids }] }), knowledge: null },
+    { messageId: '5', messageIndex: 5, transactionId: 'message:5' }, [], { trackWorld: true, wardrobe: withCloset ? tied : wardrobe }).state;
+  const worn = dress([pants.id, band.id, jacket.id], true).world.wardrobe[mikey.id];
+  assert.deepEqual(worn.cardIds, [pants.id, band.id], 'the jacket is not in the closet and was not worn');
+  assert.match(worn.outfit, /Широкие штаны/);
+  assert.equal(dress([pants.id], false).world.wardrobe?.[mikey.id]?.cardIds, undefined, 'without a closet the same answer changes nothing');
+});
+
+test('a library card keeps its closet (wardrobe cards and looks), cleaned and without repeats; an empty closet is no closet', async () => {
+  const { addFolder, addLibraryCharacter, emptyLibrary, updateLibraryCharacter } = await import('../src/core/index.js');
+  const tr = addFolder(emptyLibrary(), { name: 'МБ' });
+  const added = addLibraryCharacter(tr.library, { folderId: tr.folder.id, name: 'Майки', closet: { cardIds: ['a', 'b', 'a', ''], lookIds: ['l1'] } });
+  assert.deepEqual(added.character.closet, { cardIds: ['a', 'b'], lookIds: ['l1'] });
+  const emptied = updateLibraryCharacter(added.library, added.character.id, { closet: { cardIds: [], lookIds: [] } });
+  assert.equal(emptied.characters[0].closet, undefined);
+});
+
+test('the weather reaches the chronicler and the narrator, so nobody goes out in a T-shirt in frost', async () => {
+  const { WORLD_INSTRUCTIONS } = await import('../src/integration/world-analysis.js');
+  const { buildScenePrompt } = await import('../src/integration/world-prompt.js');
+  const { wardrobe } = closet();
+  const state = chat();
+  const cold = buildWorldBlock(state, 'Майки', null, wardrobe, null, { kind: 'snow', temp: -10, text: 'метёт' });
+  assert.ok(cold.includes('Outdoor weather: snow, about -10°C — метёт.'));
+  assert.equal(buildWorldBlock(state, 'Майки', null, wardrobe, null, null).includes('Outdoor weather'), false, 'no weather known: no line');
+  assert.match(WORLD_INSTRUCTIONS, /weather and clothes:[^\n]*never a T-shirt in the cold/);
+  assert.match(WORLD_INSTRUCTIONS, /never correct them for the weather|never correct[^\n]*weather/);
+  const scene = buildScenePrompt(state, { weather: { kind: 'snow', temp: -10, text: '' } });
+  assert.match(scene, /Dress for it:[^\n]*frost/);
+});
+
+test('a personal piece («только у него»): only its owner has it in their closet, for the chronicler too; a set that holds it is hidden from the others', async () => {
+  const { addFolder, addLibraryCharacter, emptyLibrary, personalPieces, updateLibraryCharacter } = await import('../src/core/index.js');
+  const { closetsByEntity, linkCards } = await import('../src/integration/card-links.js');
+  const { wardrobe, jacket, pants, band, look } = closet();
+  const tr = addFolder(emptyLibrary(), { name: 'МБ' });
+  let library = tr.library;
+  const make = (name, closetFields) => { const made = addLibraryCharacter(library, { folderId: tr.folder.id, name, closet: closetFields }); library = made.library; return made.character; };
+  const mikeyCard = make('Майки', { cardIds: [jacket.id, pants.id], lookIds: [look.id], ownIds: [jacket.id, 'not-in-closet'] });
+  const ranCard = make('Ран', { cardIds: [jacket.id, band.id], lookIds: [look.id] });
+  assert.deepEqual(library.characters[0].closet.ownIds, [jacket.id], 'personal ones are a subset of the closet');
+  assert.equal(personalPieces(library).get(jacket.id), mikeyCard.id);
+
+  let state = applyOperations(createDefaultState(), [createOperation('entity.upsert', mikey), createOperation('entity.upsert', { id: 'ran', name: 'Ран' })]);
+  state = linkCards(state, library, [mikeyCard.id, ranCard.id]).state;
+  const closets = closetsByEntity(state, library, wardrobe, personalPieces);
+  assert.deepEqual(closets[mikey.id].cardIds, [jacket.id, pants.id], 'the owner keeps it');
+  assert.deepEqual(closets[mikey.id].lookIds, [look.id]);
+  assert.deepEqual(closets.ran.cardIds, [band.id], 'the other one does not see it');
+  assert.deepEqual(closets.ran.lookIds, [], 'nor the set that holds it');
+
+  // Two cards claiming one piece: the first one in the library keeps it.
+  const both = updateLibraryCharacter(library, ranCard.id, { closet: { cardIds: [jacket.id, band.id], lookIds: [], ownIds: [jacket.id] } });
+  assert.equal(personalPieces(both).get(jacket.id), mikeyCard.id);
+  // The chronicler is shown the closets without the foreign piece.
+  const block = buildWorldBlock(applyOperations(state, [createOperation('scene.set', { presentIds: [mikey.id, 'ran'] })]), 'Майки и Ран', null, { ...wardrobe, closets });
+  const ranLine = block.split('\n').find(line => line.startsWith('- Ран') && line.includes('pieces ['));
+  assert.ok(ranLine && !ranLine.includes(jacket.id) && ranLine.includes(band.id));
+});

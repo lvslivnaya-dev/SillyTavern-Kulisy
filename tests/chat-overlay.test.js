@@ -28,31 +28,37 @@ const view = (overrides = {}) => ({
 
 const tileOf = (bar, name) => [...bar.querySelectorAll('.ku-tile')].find(item => item.querySelector('.ku-tile-name').textContent === name);
 
-test('the drawer sits above the message box: closed it is a slim bar, open it shows the cast', () => {
+test('the drawer is a side panel: a rail on the wall always, the panel beside it only when opened', () => {
   const toggles = [];
   const overlay = mountChatOverlay({ onTogglePresent: () => {}, onLeak: () => {}, onToggleOpen: open => toggles.push(open) });
   try {
     overlay.render(view());
     const bar = document.getElementById('ku-scene-chips');
-    assert.equal(bar.nextElementSibling.id, 'send_form');
+    assert.equal(bar.parentElement, document.body, 'it hangs on the browser, not above the message box');
+    assert.ok(bar.classList.contains('ku-side'));
     assert.equal(bar.classList.contains('open'), false);
-    assert.equal(bar.querySelectorAll('.ku-chip').length, 0, 'closed: no chips, only the summary');
-    assert.match(bar.querySelector('.ku-dir-summary').textContent, /Майки/);
-    bar.querySelector('.ku-dir-summary').click();
-    assert.deepEqual(toggles, [true], 'a click anywhere on the closed bar opens it');
+    assert.equal(bar.querySelectorAll('.ku-chip').length, 0, 'closed: the panel is empty, only the rail');
+    assert.ok(bar.querySelector('.ku-rail .ku-rail-toggle'), 'the rail has its fold button');
+    assert.match(tileOf(bar, 'Кто').textContent, /2 на сцене/, 'the tabs are on the rail even when the panel is folded');
+    bar.querySelector('.ku-rail-toggle').click();
+    assert.deepEqual(toggles, [true], 'the rail button unfolds the panel');
+    tileOf(bar, 'Кто').click();
+    assert.deepEqual(toggles, [true, true], 'a tab pressed on a folded panel unfolds it on that tab');
     overlay.render(view({ director: { open: true } }));
     const chips = [...bar.querySelectorAll('.ku-chip')];
     assert.deepEqual(chips.map(chip => chip.querySelector('.ku-chip-name').textContent), ['Майки', 'Судзу', 'Ран']);
     assert.equal(chips[2].classList.contains('on'), false);
-    assert.match(bar.querySelector('.ku-tile-stack').textContent, /гараж/, 'time and place are strips of one tile');
+    assert.match(bar.querySelector('.ku-tile-stack').textContent, /гараж/, 'time and place are strips on the rail');
     assert.equal(bar.querySelectorAll('.ku-tile-stack .ku-strip').length, 2, 'time and place (secrets only when there are some)');
-    assert.match(tileOf(bar, 'Кто').textContent, /2 на сцене/);
-    // Open: clicking the bar or a chip does not close it; only the arrow does.
+    assert.match(bar.querySelector('.ku-dir-head').textContent, /Кто на сцене/, 'the head names the tab');
+    // Open: clicking the head or a chip does not fold it; the rail button and the tab that is already on do.
     bar.querySelector('.ku-dir-head').click();
     chips[0].click();
-    assert.deepEqual(toggles, [true]);
-    bar.querySelector('.ku-dir-arrow').click();
-    assert.deepEqual(toggles, [true, false]);
+    assert.deepEqual(toggles, [true, true]);
+    bar.querySelector('.ku-rail-toggle').click();
+    assert.deepEqual(toggles, [true, true, false]);
+    tileOf(bar, 'Кто').click();
+    assert.deepEqual(toggles, [true, true, false, false], 'the same tab again folds the panel into the rail');
   } finally { overlay.unmount(); }
   assert.equal(document.getElementById('ku-scene-chips'), null, 'unmount cleans up');
 });
@@ -317,7 +323,7 @@ test('the dice tile appears only in an intimate scene; options are chips, the ch
     overlay.render(view({ sceneMode: 'intim', dice: dice([]), director: { open: true } }));
     assert.match(tileOf(bar, 'Кубик').textContent, /бросить/);
     tileOf(bar, 'Кубик').click();
-    const chips = () => [...bar.querySelectorAll('.ku-dice-chip')];
+    const chips = () => [...document.querySelectorAll('#ku-scene-chips .ku-dice-chip')];
     assert.deepEqual(chips().map(chip => chip.textContent), ['ведёт Ран', 'ведёт Майки', 'вагинальный', 'оральный: просит персону', 'оральный: требует от персоны, нажимает']);
     assert.equal(chips().filter(chip => chip.classList.contains('on')).length, 0);
     // The oral options that the persona is asked for and pressed into are there.
@@ -330,26 +336,26 @@ test('the dice tile appears only in an intimate scene; options are chips, the ch
     assert.deepEqual(chips().filter(chip => chip.getAttribute('aria-pressed') === 'true').length, 3);
     assert.match(tileOf(bar, 'Кубик').textContent, /выбрано/);
     // Roll, lock, re-roll a group, send, clear.
-    const press = label => [...bar.querySelectorAll('.ku-dir-dice button')].find(item => item.textContent.startsWith(label));
+    const press = label => [...document.querySelectorAll('#ku-scene-chips button')].find(item => item.textContent.startsWith(label));
     press('🎲 Перебросить').click(); await settle();
     assert.deepEqual(calls.at(-1), ['roll', { only: '' }]);
-    [...bar.querySelectorAll('.ku-dir-dice-row')][1].querySelector('[data-ku-action="dir-dice-lock"]').click(); await settle();
+    [...document.querySelectorAll('#ku-scene-chips .ku-dir-dice-row')][1].querySelector('[data-ku-action="dir-dice-lock"]').click(); await settle();
     assert.deepEqual(calls.at(-1), ['lock', { group: 'act' }]);
-    [...bar.querySelectorAll('.ku-dir-dice-row')][0].querySelector('[data-ku-action="dir-dice-roll"]').click(); await settle();
+    [...document.querySelectorAll('#ku-scene-chips .ku-dir-dice-row')][0].querySelector('[data-ku-action="dir-dice-roll"]').click(); await settle();
     assert.deepEqual(calls.at(-1), ['roll', { only: 'initiative' }]);
     press('▶ Отправить').click(); await settle();
     assert.deepEqual(calls.at(-1), ['send']);
     press('Сбросить').click(); await settle();
     assert.deepEqual(calls.at(-1), ['clear']);
     // Her own option: «+» opens a field, Enter adds it to the group.
-    [...bar.querySelectorAll('.ku-dir-dice-row')][1].querySelector('[data-ku-action="dir-dice-add-open"]').click();
-    const field = bar.querySelector('[data-ku-field="dice-add"]');
+    [...document.querySelectorAll('#ku-scene-chips .ku-dir-dice-row')][1].querySelector('[data-ku-action="dir-dice-add-open"]').click();
+    const field = document.querySelector('#ku-scene-chips [data-ku-field="dice-add"]');
     field.value = 'с повязкой на глазах';
     field.dispatchEvent(new window.Event('input', { bubbles: true }));
     field.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     await settle();
     assert.deepEqual(calls.at(-1), ['add', { group: 'act', text: 'с повязкой на глазах' }]);
-    assert.equal(bar.querySelector('[data-ku-field="dice-add"]'), null, 'the field folds after');
+    assert.equal(document.querySelector('#ku-scene-chips [data-ku-field="dice-add"]'), null, 'the field folds after');
     // A sent roll is shown as sent.
     overlay.render(view({ sceneMode: 'intim', dice: dice([{ group: 'act', id: 'vaginal', text: 'вагинальный' }], { sent: true }), director: { open: true } }));
     assert.match(tileOf(bar, 'Кубик').textContent, /отправлен/);
@@ -422,5 +428,69 @@ test('the heat tile shows the number, the panel nudges, sets, locks and resets i
     assert.deepEqual(calls.at(-1), { lock: true });
     press('Сбросить').click(); await settle();
     assert.deepEqual(calls.at(-1), { clear: true });
+  } finally { overlay.unmount(); }
+});
+
+test('the strip above the message box says what the scene is and what goes to the model with the next post', async () => {
+  const toggles = [];
+  const overlay = mountChatOverlay({ onTogglePresent: () => {}, onLeak: () => {}, onToggleOpen: open => toggles.push(open) });
+  try {
+    overlay.render(view({ time: 'вт 22:20', location: 'палуба', director: { open: false, cues: [{ id: 'c1', badge: '⚡', label: 'Событие: шторм', used: false, wait: 0 }] },
+      sceneMode: 'intim', dice: { groups: [], picks: [{ group: 'mood', id: 'j', text: 'с ревностью', ahead: false }], locked: [], sent: false, stage: { id: 'touch', label: 'Касания', ru: 'только касания', note: 'тихо', stages: [] } } }));
+    const strip = document.getElementById('ku-scene-strip');
+    assert.equal(strip.nextElementSibling.id, 'send_form', 'it sits right above the message box');
+    assert.match(strip.textContent, /вт 22:20/);
+    assert.match(strip.textContent, /гараж|палуба/);
+    assert.match(strip.textContent, /Майки/, 'who is on stage');
+    assert.match(strip.querySelector('.ku-ss-out').textContent, /Уйдёт модели: .*Касания: только касания · заметка: тихо.*Событие: шторм.*с ревностью \(не отправлен\)/, 'the stage, the queued directions and the roll');
+    strip.click();
+    assert.deepEqual(toggles, [true], 'a click opens the panel');
+    overlay.render(view({ director: { open: false } }));
+    assert.match(document.getElementById('ku-scene-strip').querySelector('.ku-ss-out').textContent, /ничего заготовленного/);
+    assert.equal(document.getElementById('ku-scene-strip').querySelector('.ku-ss-last'), null, 'nothing was sent yet');
+    overlay.render(view({ lastSent: { stage: { label: 'Касания', note: 'тихо' }, cues: ['⚡ Событие: шторм'] } }));
+    assert.match(document.getElementById('ku-scene-strip').querySelector('.ku-ss-last').textContent, /В последний запрос ушло: стадия «Касания», заметка «тихо» · ⚡ Событие: шторм/);
+    overlay.render(view({ lastSent: { stage: null, cues: [] } }));
+    assert.match(document.getElementById('ku-scene-strip').querySelector('.ku-ss-last').textContent, /ничего от Кулис, кроме обычной сцены/);
+  } finally { overlay.unmount(); }
+  assert.equal(document.getElementById('ku-scene-strip'), null, 'unmount takes it away');
+});
+
+test('the songs tile: pin a song from the library, say who sings it, drop a false alarm', async () => {
+  const calls = [];
+  const overlay = mountChatOverlay({ onTogglePresent: () => {}, onLeak: () => {}, onSong: payload => { calls.push(payload); } });
+  const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+  const songs = (over = {}) => ({ enabled: true, playing: [], found: [], muted: [], library: [{ songId: 's1', title: 'Ласточка', artist: 'Кино' }, { songId: 's2', title: 'Дождь', artist: '' }], ...over });
+  const director = { open: true, people: [{ id: 'm', name: 'Майки' }, { id: 'r', name: 'Ран' }] };
+  const press = (bar, label) => [...bar.querySelector('.ku-dir-songs').querySelectorAll('button')].find(item => item.textContent.includes(label));
+  try {
+    overlay.render(view({ songs: songs(), director }));
+    const bar = document.getElementById('ku-scene-chips');
+    assert.match(tileOf(bar, 'Песни').textContent, /тихо/);
+    tileOf(bar, 'Песни').click();
+    // Find a song of the library and put it on.
+    const find = bar.querySelector('[data-ku-field="song-find"]');
+    find.value = 'ласт';
+    find.dispatchEvent(new window.Event('input', { bubbles: true }));
+    press(bar, 'Ласточка — Кино').click(); await settle();
+    assert.deepEqual(calls.at(-1), { op: 'pin', songId: 's1', mode: 'sound', singerId: '' });
+    // On: it plays; pick who sings it, or take it away.
+    overlay.render(view({ songs: songs({ playing: [{ songId: 's1', title: 'Ласточка', artist: 'Кино', mode: 'sound', singerId: '' }] }), director }));
+    assert.match(tileOf(bar, 'Песни').textContent, /▶ 1/);
+    assert.equal(press(bar, '🔊 Звучит').getAttribute('aria-pressed'), 'true');
+    press(bar, '🎤 Майки').click(); await settle();
+    assert.deepEqual(calls.at(-1), { op: 'pin', songId: 's1', mode: 'sung', singerId: 'm' });
+    press(bar, '× Убрать').click(); await settle();
+    assert.deepEqual(calls.at(-1), { op: 'unpin', songId: 's1' });
+    // A song the posts brought up by mistake: «Не она» mutes it, «Вернуть» brings it back.
+    overlay.render(view({ songs: songs({ found: [{ songId: 's2', title: 'Дождь', why: 'lyrics', muted: false }] }), director }));
+    assert.match(tileOf(bar, 'Песни').textContent, /слышно/);
+    assert.match(bar.querySelector('.ku-dir-songs').textContent, /Дождь · по словам/);
+    press(bar, 'Не она').click(); await settle();
+    assert.deepEqual(calls.at(-1), { op: 'mute', songId: 's2' });
+    overlay.render(view({ songs: songs({ found: [{ songId: 's2', title: 'Дождь', why: 'lyrics', muted: true }], muted: [{ songId: 's2', title: 'Дождь' }] }), director }));
+    assert.match(bar.querySelector('.ku-dir-songs').textContent, /заглушена/);
+    press(bar, 'Вернуть').click(); await settle();
+    assert.deepEqual(calls.at(-1), { op: 'unmute', songId: 's2' });
   } finally { overlay.unmount(); }
 });

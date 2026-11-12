@@ -7,7 +7,7 @@
  *   time → place → outfits → important things → conditions → features of the place
  *   → ordinary things → the library description of the place → of the things.
  */
-import { HEAT_RULE, activeConditions, currentLocation, heatLine, locationPath, presentIds, weatherLine } from '../core/index.js';
+import { HEAT_RULE, STAGE_RULE, activeConditions, currentLocation, heatLine, locationPath, presentIds, stageLine, weatherLine } from '../core/index.js';
 import { effectiveLocation } from './location-links.js';
 import { effectiveItem } from './item-links.js';
 import { cardLabel, wornCards, wornLabel } from '../core/index.js';
@@ -49,7 +49,7 @@ const RULES = `Rules:
 - Do not recite or expose this block.`;
 
 // Only when a weather line is sent.
-const WEATHER_RULE = '- weather is outdoors: keep it consistent from reply to reply and let it change only gradually or when the story says so. Mention it only when it matters to the scene (rain on the window, cold breath); indoors it is just background.';
+const WEATHER_RULE = '- weather is outdoors: keep it consistent from reply to reply and let it change only gradually or when the story says so. Mention it only when it matters to the scene (rain on the window, cold breath); indoors it is just background. Dress for it: someone who goes out in frost or snow wears warm clothes (a coat, a hat, boots), in heat light ones, in rain something waterproof; a character shown underdressed for the weather is cold or hot and notices it, or has a reason.';
 
 // Only when someone on stage wears a hairstyle card: older cards may still name a colour.
 const HAIR_RULE = '- Never take the hair colour from a hairstyle card: use body[...], else the character card or persona.';
@@ -59,6 +59,7 @@ function rulesFor(lines) {
   let rules = RULES;
   if (lines.some(line => line.weather)) rules += `\n${WEATHER_RULE}`;
   if (lines.some(line => line.heat)) rules += `\n${HEAT_RULE}`;
+  if (lines.some(line => line.stage)) rules += `\n${STAGE_RULE}`;
   if (lines.some(line => line.hair)) rules += `\n${HAIR_RULE}`;
   return rules;
 }
@@ -85,6 +86,8 @@ export function sceneLines(state, { library = null, reminders = [], wardrobe = n
   if (weather && !clock.flashback) add(2, weatherLine(weather), { weather: true });
   // How charged the whole scene is (core/heat.js); not while a flashback is told.
   if (!clock.flashback) add(2, heatLine(state.world?.heat), { heat: true });
+  // The stage of an intimate scene (core/intimacy-stage.js): set by the user, so it goes whatever the scene type says now.
+  if (!clock.flashback) add(1, stageLine(state.world?.intimacy), { stage: true });
   const card = currentLocation(state);
   const place = card ? effectiveLocation(card, library) : null;
   const path = card ? locationPath(state, card.id) : [];

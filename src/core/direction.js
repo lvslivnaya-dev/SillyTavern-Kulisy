@@ -75,7 +75,7 @@ function normalizeCue(raw, knownIds) {
   if (raw.label) cue.label = clip(raw.label, 120);
   if (raw.kind === 'dice' || raw.kind === 'quest') {
     // The intimacy dice (and a quest step brought in): `text` is the short Russian line, `detail` what the narrator is told.
-    const detail = clip(raw.detail, 700);
+    const detail = clip(raw.detail, 1600);
     if (!detail || !cue.text) return null;
     cue.detail = detail;
   }

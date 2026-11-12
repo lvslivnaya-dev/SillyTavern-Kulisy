@@ -33,6 +33,28 @@ export function splitWords(text) {
   return clip(text, NAME_LIMITS.name).split(/\s+/).filter(Boolean);
 }
 
+/**
+ * Every way the name and its aliases are written in the cases of Russian, as whole phrases: «Манджиро Сано» → «Манджиро Сано»,
+ * «Манджиро Сано», «Сано Манджиро»… (each word in the same case, in both orders). What a card uses to notice the character in the posts.
+ * The names themselves are not repeated.
+ */
+export function recognitionForms(entry) {
+  const byWord = new Map((entry?.words ?? []).map(item => [wordKey(item.word), item]));
+  const own = new Set([entry?.name, ...(entry?.aliases ?? [])].map(wordKey));
+  const forms = new Set();
+  for (const name of [entry?.name, ...(entry?.aliases ?? [])]) {
+    const words = splitWords(name);
+    if (!words.length) continue;
+    for (const [key] of NAME_CASES) {
+      const parts = words.map(word => { const item = byWord.get(wordKey(word)); return item && !item.same && item[key] ? item[key] : word; });
+      forms.add(parts.join(' '));
+      if (parts.length > 1) forms.add([...parts].reverse().join(' '));
+    }
+    if (words.length > 1) forms.add([...words].reverse().join(' '));
+  }
+  return [...forms].filter(form => form && !own.has(wordKey(form)));
+}
+
 /** The words of the name and its aliases, once each, in reading order. */
 export function wordsFor(name, aliases = []) {
   const seen = new Set();

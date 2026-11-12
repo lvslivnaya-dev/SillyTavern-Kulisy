@@ -107,11 +107,17 @@ export function normalizeGate(raw) {
 
 /** «[ Manjiro Sano ] - Visual» → { name: 'Manjiro Sano', section: 'visual' }; null for any other title. */
 export function parseGateTitle(comment) {
+  const found = splitGateTitle(comment);
+  return found ? { name: found.name, section: found.section } : null;
+}
+
+/** The same, with the words of the section as they are written: «[ Manjiro Sano ] - Public Info» → { name, tail: 'Public Info', section: 'other' }. */
+export function splitGateTitle(comment) {
   const found = /^\s*\[\s*([^\]]+?)\s*\]\s*[-–—:]\s*(.+?)\s*$/.exec(String(comment ?? ''));
   if (!found) return null;
   const tail = found[2];
   const section = Object.entries(GATE_SECTIONS).find(([, item]) => item.match?.test(tail))?.[0] ?? 'other';
-  return { name: found[1], section };
+  return { name: found[1], tail, section };
 }
 
 const lower = value => String(value ?? '').toLocaleLowerCase('ru-RU');
@@ -185,7 +191,7 @@ export function namedInText(text, people) {
 }
 
 /** The one character an entry is about (by its title name, else by its name-like keys), or ''. */
-function entityOf(entry, titleName, people) {
+export function entityOf(entry, titleName, people) {
   const byTitle = people.filter(entity => [entity.name, ...(entity.aliases ?? [])]
     .some(name => normalizeAlias(name) === normalizeAlias(titleName) || namesSoundAlike(name, titleName)));
   if (byTitle.length === 1) return byTitle[0].id;
@@ -196,6 +202,62 @@ function entityOf(entry, titleName, people) {
   return byKey.length === 1 ? byKey[0].id : '';
 }
 
+
+/**
+ * What happens to one section of one character, by its rule (the same for a lorebook entry and a library card).
+ *   rule   — { when, absent } (GATE_WHEN / GATE_ABSENT);
+ *   ctx    — onStage, isNamed (named in the posts, not on stage), mode, entranceDue, ago (turns since the last «entrance»),
+ *            partner() → whether the second one of a pair is in play.
+ * → { action: 'force' | 'drop' | 'keep', why, entrance } — `entrance`: this send counts as the character's entrance.
+ */
+export function decideSection(rule, { onStage, isNamed, mode, entranceDue, ago, partner }) {
+  if (!onStage) {
+    if (isNamed && rule.when === 'always') return { action: 'force', why: '', entrance: false };
+    if (rule.absent === 'never') return { action: 'drop', why: isNamed ? 'только назван' : 'не на сцене', entrance: false };
+    return { action: 'keep', why: '', entrance: false };
+  }
+  switch (rule.when) {
+    case 'always': return { action: 'force', why: '', entrance: false };
+    case 'never': return { action: 'drop', why: 'выключено правилом', entrance: false };
+    case 'fight':
+    case 'intim':
+      return mode === rule.when
+        ? { action: 'force', why: '', entrance: false }
+        : { action: 'drop', why: rule.when === 'fight' ? 'не бой' : 'не близость', entrance: false };
+    case 'entrance':
+      return entranceDue
+        ? { action: 'force', why: '', entrance: true }
+        : { action: 'drop', why: `было ${ago} ход. назад`, entrance: false };
+    case 'pair':
+      return partner()
+        ? { action: 'force', why: '', entrance: false }
+        : { action: 'drop', why: 'второго нет в сцене', entrance: false };
+    default: return { action: 'keep', why: '', entrance: false };
+  }
+}
+
+/**
+ * The words by which each person who is in play (on stage, named in the post, in several sentences of the reply)
+ * can be found in a text: Map entityId → [words]. `extraNames(id)` adds more names, e.g. the title names of a sheet.
+ */
+export function buildAround(people, present, named, inReply, extraNames = () => []) {
+  const around = new Map();
+  for (const entity of people) {
+    if (!present.has(entity.id) && !named.has(entity.id) && !inReply.has(entity.id)) continue;
+    const words = new Set([entity.name, ...(entity.aliases ?? [])].map(lower).filter(word => word.length >= 3));
+    for (const titleName of extraNames(entity.id)) {
+      for (const word of lower(titleName).split(/\s+/)) if (word.length >= 3) words.add(word);
+    }
+    around.set(entity.id, [...words]);
+  }
+  return around;
+}
+
+/** Whether the lower-cased text names anybody in `around` other than `selfId`. */
+export function partnerNamed(content, selfId, around) {
+  return [...around].some(([otherId, words]) => otherId !== selfId && words.some(word => content.includes(word)));
+}
+
 /**
  * Decide every entry of the lists.
  *   lists      — the WORLDINFO_ENTRIES_LOADED payload ({ globalLore: [], … });
@@ -204,10 +266,11 @@ function entityOf(entry, titleName, people) {
  *   turn       — number of the user's posts so far (the same for a swipe of the reply);
  *   tracker    — Map entityId → turn when their «entrance» sections last went out (mutated);
  *   namedText  — the user's fresh post: whoever it names is spoken to or about;
- *   replyText  — the reply before it: whoever it names in two sentences or more acts nearby.
+ *   replyText  — the reply before it: whoever it names in two sentences or more acts nearby;
+ *   skipIds    — characters whose sheet is a library card (card-prompt.js): their lorebook entries are not decided here.
  * → { decisions: Map entry → 'force' | 'drop', report }
  */
-export function planGate({ lists, state, config, presentIds = [], mode = 'calm', turn = 0, tracker = new Map(), namedText = '', replyText = '' }) {
+export function planGate({ lists, state, config, presentIds = [], mode = 'calm', turn = 0, tracker = new Map(), namedText = '', replyText = '', skipIds = new Set() }) {
   const gate = normalizeGate(config);
   const decisions = new Map();
   const report = { mode, forced: 0, dropped: 0, kept: 0, savedCharacters: 0, people: [] };
@@ -228,7 +291,7 @@ export function planGate({ lists, state, config, presentIds = [], mode = 'calm',
       if (!title) continue;
       if (!cache.has(title.name)) cache.set(title.name, entityOf(entry, title.name, people));
       const id = cache.get(title.name);
-      if (!id) continue;
+      if (!id || skipIds.has(id)) continue;
       if (!sheets.has(id)) sheets.set(id, { titleNames: new Set(), items: [] });
       sheets.get(id).titleNames.add(title.name);
       sheets.get(id).items.push({ entry, section: title.section });
@@ -239,15 +302,7 @@ export function planGate({ lists, state, config, presentIds = [], mode = 'calm',
   const named = namedInText(namedText, people);
   const inReply = namedSentences(replyText, people);
   for (const [id, count] of inReply) if (count >= 2) named.add(id);
-  const around = new Map();
-  for (const entity of people) {
-    if (!present.has(entity.id) && !named.has(entity.id) && !inReply.has(entity.id)) continue;
-    const words = new Set([entity.name, ...(entity.aliases ?? [])].map(lower).filter(word => word.length >= 3));
-    for (const titleName of sheets.get(entity.id)?.titleNames ?? []) {
-      for (const word of lower(titleName).split(/\s+/)) if (word.length >= 3) words.add(word);
-    }
-    around.set(entity.id, [...words]);
-  }
+  const around = buildAround(people, present, named, inReply, id => sheets.get(id)?.titleNames ?? []);
 
   // 3. The rules.
   const sent = [];
@@ -262,22 +317,12 @@ export function planGate({ lists, state, config, presentIds = [], mode = 'calm',
     const person = { id, name: state.entities[id]?.name ?? id, present: present.has(id), named: isNamed, parts: [] };
     for (const { entry, section } of sheet.items) {
       const rule = gate.sections[section];
-      let action = 'keep';
-      let why = '';
-      if (!onStage) {
-        if (isNamed && rule.when === 'always') action = 'force';
-        else if (rule.absent === 'never') { action = 'drop'; why = isNamed ? 'только назван' : 'не на сцене'; }
-      } else if (rule.when === 'always') action = 'force';
-      else if (rule.when === 'never') { action = 'drop'; why = 'выключено правилом'; }
-      else if (rule.when === 'fight' || rule.when === 'intim') {
-        if (mode === rule.when) action = 'force'; else { action = 'drop'; why = rule.when === 'fight' ? 'не бой' : 'не близость'; }
-      } else if (rule.when === 'entrance') {
-        if (entranceDue) { action = 'force'; sent.push(id); } else { action = 'drop'; why = `было ${turn - last} ход. назад`; }
-      } else if (rule.when === 'pair') {
-        const content = lower(entry.content);
-        const partner = [...around].some(([otherId, words]) => otherId !== id && words.some(word => content.includes(word)));
-        if (partner) action = 'force'; else { action = 'drop'; why = 'второго нет в сцене'; }
-      }
+      const verdict = decideSection(rule, {
+        onStage, isNamed, mode, entranceDue, ago: turn - last,
+        partner: () => partnerNamed(lower(entry.content), id, around),
+      });
+      const { action, why } = verdict;
+      if (verdict.entrance) sent.push(id);
       const characters = String(entry.content ?? '').length;
       if (action !== 'keep') decisions.set(entry, action);
       if (action === 'force') report.forced += 1;

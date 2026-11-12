@@ -12,6 +12,7 @@ export const AUX_PURPOSES = Object.freeze({
   analysis: 'Анализ ответов и истории',
   discovery: 'Поиск персонажей',
   generation: 'Генерация факторов, целей и хедканонов',
+  translation: 'Перевод карточек на английский',
 });
 
 export function auxEnabledFor(settings, purpose) {

@@ -26,6 +26,18 @@ DOM components that receive state and callbacks. The Studio and widget never cal
 
 Composition root and lifecycle controller. It wires SillyTavern events to the store, refreshes UI, and guarantees cleanup/idempotent activation.
 
+## Character cards
+
+The library (`settings.locationLibrary`) has a third shelf, `characters`: cards of `{ id, folderId, name, aliases, sections[], image? }` (`core/character-cards.js`, stored by `core/location-library.js`). A section is `{ id, kind, title, text, when?, keys? }`; `kind` is one of the gate's sections, so a card follows the same rules as a lorebook sheet.
+
+A card meets a chat through `state.ui.cards = { cardId: entityId }` (`integration/card-links.js`, not journaled; the entity it creates or renames goes through the journal as an `entity.upsert`). The persona never gets one.
+
+Songs (`core/song-library.js`, page `ui/pages/songs.js`, prompt key `kulisy-songs`) live in `settings.songLibrary`, shared by all chats, like the name library. `planSongs` decides what goes out: the songs pinned in the chat (`state.ui.songs = { playing: [{ songId, mode: 'sound' | 'sung', singerId }], muted: [songId] }`, not journaled, edited from the drawer) and the songs that `findSongs` notices in the last `lookback` posts (`recentText`): `minWords` words of the lyrics in a row (normalized by `songWords`: case, punctuation, «ё», stretched letters), a title (one word only in quotes or between ♪) or a key. Noticing is stateless, so swipes and deletions need no rollback; the last quoted lyric line (`lyricsHit`) goes into the block so the singing can continue from the next line.
+
+A card holds one text per section and says which language it is in (`lang: 'en'` once translated). Cards loaded from Obsidian notes carry `source = { path, hash, stale? }`: the hash covers the name and the Russian sections only (`character-import.js`), so `checkCardSources` marks a card stale only when the Russian original changed; `refreshLibraryCharacter` loads it again (Russian) keeping section ids and own rules. The folder handle for re-reading notes lives in IndexedDB (`ui/notes-folder.js`, File System Access API); translation is `integration/card-translate.js`, one model request per section (aux purpose `translation`).
+
+`integration/card-prompt.js` decides which sections go out (`planCards`, built on `decideSection` shared with `planGate`) and writes the `kulisy-cards` block; `planSheetDrops` takes the same character's «[ Name ] - Section» entries out of the lorebook lists so nothing is sent twice. `digestFor` gives the cards to the models that analyse or generate (never the NSFW section).
+
 ## Persistence
 
 The authoritative state lives in the active chat's metadata under a versioned namespace. Global extension settings contain preferences only. A long-lived reference to `chatMetadata` is never retained because SillyTavern replaces that object when switching chats.

@@ -2,7 +2,7 @@ import { applyOperation, createEntity, createOperation, isDead, relationshipId, 
 import { coupledDeltas } from './coupling.js';
 import { materializeKnowledge } from './knowledge-analysis.js';
 import { presentIds } from '../core/knowledge.js';
-import { confirmSlips, materializeClock, materializePlace, materializeHeat, materializeSceneLocation, materializeWeather, materializeWorldRest, questProposals } from './world-analysis.js';
+import { confirmSlips, materializeClock, materializePlace, materializeHeat, materializeSceneLocation, materializeWeather, materializeWorldRest, questProposals, stageProposals } from './world-analysis.js';
 
 function normalizedName(value) {
   return String(value ?? '').trim().toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
@@ -261,6 +261,7 @@ export function applyAnalysisResult(state, result, metadata = {}, acceptedNewCha
   if (options.triangleEcho !== false) triangleEcho(api, operations, options);
   const slips = world ? confirmSlips(world, api, beforeWorld) : [];
   // Quests are only proposed: the plaque under the reply asks, nothing is written before.
-  const quests = world ? questProposals(world, api) : [];
+  // The intimate stage is a proposal of the same kind (the plaque asks); it travels with the quests.
+  const quests = world ? [...questProposals(world, api), ...stageProposals(world, api)] : [];
   return { state: next, operations, headcanons, leaks, deaths, reveals, secrets, slips, quests };
 }

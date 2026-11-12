@@ -237,9 +237,9 @@ test('"what the model gets": one card per block in request order, each saying wh
     const section = label => [...root.querySelectorAll('.set-nav button')].find(node => node.textContent === label);
     section('Что получает модель').click();
     const titles = [...root.querySelectorAll('.pm-block .pm-title')].map(node => node.textContent);
-    assert.deepEqual(titles.slice(0, 8), [
+    assert.deepEqual(titles.slice(0, 10), [
       'Хроника: что было раньше', 'Сцена: время, место, одежда, вещи', 'Календарь: какое сегодня число', 'Кто что знает',
-      'Имена: как писать и склонять', 'Квесты: что в игре', 'Отношения: чувства, воспоминания, напряжения', 'Подсказка режиссёра',
+      'Карточки: кто эти люди', 'Имена: как писать и склонять', 'Квесты: что в игре', 'Песни: как звучат и что поют', 'Отношения: чувства, воспоминания, напряжения', 'Подсказка режиссёра',
     ]);
     assert.equal(titles.at(-1), 'Лорбуки: анкеты персонажей и мир');
     const blocks = [...root.querySelectorAll('.pm-block')];
@@ -260,7 +260,7 @@ test('"what the model gets": one card per block in request order, each saying wh
     // The exact text stays one fold away.
     assert.match(knowledgeCard.querySelector('.pm-raw').textContent, /unknown\[Майки\]: \(secret\)/);
     // Feelings as labelled numbers; the record says who else knows.
-    const relation = blocks[6].textContent;
+    const relation = blocks[8].textContent;
     assert.match(relation, /Привязанность 42/);
     assert.match(relation, /Страх -2/);
     assert.match(relation, /знают: Майки, Судзу, Ран/);
@@ -997,5 +997,75 @@ test('side menu: a group folds, keeps the open page, and the fold is saved', asy
     [...root.querySelectorAll('.nav-fold')].find(item => /Мир/.test(item.textContent)).click();
     assert.ok(items().includes('Локации'));
     assert.deepEqual(saved.at(-1).folded, []);
+  } finally { studio?.destroy(); }
+});
+
+test('songs page: the library, the recognition check, adding a song, saving a field, the switches', async () => {
+  const calls = [];
+  const song = { id: 's1', title: 'Ласточка', artist: 'Кино', aliases: [], keys: [], mood: '', sound: '', lyrics: 'Ласточка моя, улетай за море\nТам, где нет зимы, там, где нет печали', off: false, folderId: '' };
+  const snapshot = {
+    ...sampleState(),
+    songs: { version: 1, enabled: true, minWords: 4, lookback: 4, maxCharacters: 5000, folders: [], songs: [song] },
+    songsTokens: 120,
+    songsReport: { entries: [{ songId: 's1', title: 'Ласточка', artist: 'Кино', state: 'lyrics', why: 'lyrics', singerId: '', quoted: 2, characters: 60, trimmed: false }], found: [] },
+  };
+  let studio;
+  const errors = captureErrors(() => {
+    studio = createRelationshipStudio({ store: { getSnapshot: () => snapshot }, open: true, layout: { mode: 'window', tab: 'songs' }, callbacks: {
+      onSongAdd: payload => { calls.push(['add', payload]); return { id: 's2' }; },
+      onSongUpdate: payload => { calls.push(['update', payload]); return Promise.resolve(); },
+      onSongsSettings: payload => { calls.push(['settings', payload]); return Promise.resolve(); },
+      onSongRemove: payload => { calls.push(['remove', payload]); return Promise.resolve(); },
+    } });
+  });
+  try {
+    assert.deepEqual(errors, [], errors.join('\n'));
+    const root = studio.element.shadowRoot;
+    assert.match(root.textContent, /Библиотека · 1/);
+    assert.match(root.textContent, /Сейчас в запросе: 120 ток\./);
+    assert.match(root.querySelector('.ku-names-card summary').textContent, /Ласточка.*нет описания/);
+    // The check: a few lines of the song are enough.
+    const probe = root.querySelector('textarea[aria-label="Текст для проверки узнавания"]');
+    probe.value = 'Она запела: там, где нет зимы, там, где нет печали';
+    probe.dispatchEvent(new window.Event('input'));
+    assert.match(root.querySelector('.ku-songs-probe').textContent, /Узнана: «Ласточка — Кино» \(по словам, дошли до строки 2 из 2\)/);
+    probe.value = 'Просто вечер.';
+    probe.dispatchEvent(new window.Event('input'));
+    assert.match(root.querySelector('.ku-songs-probe').textContent, /Ничего не узнано/);
+    // Add a song.
+    const [title, artist] = root.querySelectorAll('.ku-songs-add input');
+    title.value = 'Дождь';
+    title.dispatchEvent(new window.Event('input'));
+    artist.value = 'Сплин';
+    artist.dispatchEvent(new window.Event('input'));
+    [...root.querySelectorAll('button')].find(item => item.textContent === 'Добавить').click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.deepEqual(calls[0], ['add', { title: 'Дождь', artist: 'Сплин', folderId: '' }]);
+    // A text typed into a song is saved as it is; keys go as a list.
+    const details = root.querySelector('.ku-names-card');
+    details.open = true;
+    const mood = details.querySelector('textarea[aria-label="Атмосфера песни"]');
+    mood.value = 'Светлая грусть';
+    mood.dispatchEvent(new window.Event('change'));
+    assert.deepEqual(calls.at(-1), ['update', { id: 's1', patch: { mood: 'Светлая грусть' } }]);
+    const keys = details.querySelector('input[aria-label="Ключевые слова"]');
+    keys.value = 'песня про вокзал, про вокзал';
+    keys.dispatchEvent(new window.Event('change'));
+    assert.deepEqual(calls.at(-1), ['update', { id: 's1', patch: { keys: ['песня про вокзал', 'про вокзал'] } }]);
+    // The switches: the song, and the whole library.
+    const send = details.querySelector('summary input');
+    send.checked = false;
+    send.dispatchEvent(new window.Event('change'));
+    assert.deepEqual(calls.at(-1), ['update', { id: 's1', patch: { off: true } }]);
+    const all = root.querySelector('.ku-names-opt input');
+    all.checked = false;
+    all.dispatchEvent(new window.Event('change'));
+    assert.deepEqual(calls.at(-1), ['settings', { enabled: false }]);
+    // Deleting asks twice.
+    const remove = () => [...details.querySelectorAll('button')].find(item => /Удалить песню|Точно удалить/.test(item.textContent));
+    remove().click();
+    assert.equal(calls.filter(call => call[0] === 'remove').length, 0, 'the first press deletes nothing');
+    remove().click();
+    assert.deepEqual(calls.at(-1), ['remove', { ids: ['s1'] }]);
   } finally { studio?.destroy(); }
 });

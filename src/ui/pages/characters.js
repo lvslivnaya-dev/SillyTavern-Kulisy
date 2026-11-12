@@ -40,6 +40,7 @@ export function createCharactersPage(ctx) {
         avatar,
         element('span', { style: { flex: '1', minWidth: '0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }, text: name }),
         ...(isPersona ? [element('em', { className: 'muted', text: 'персона' })] : []),
+        ...(ctx.snapshot.cardByEntity?.[characterId(character)] ? [element('em', { className: 'muted', text: 'карточка', title: `Карточка из библиотеки: ${ctx.snapshot.cardByEntity[characterId(character)].name}` })] : []),
         editAliases,
       ]);
       if (!isPersona) {

@@ -10,6 +10,8 @@ export const KNOWLEDGE_PROMPT_KEY = 'kulisy-knowledge';
 export const CHRONICLE_PROMPT_KEY = 'kulisy-chronicle';
 /** The scene block (time, place, clothes, things), next to the knowledge block. */
 export const SCENE_PROMPT_KEY = 'kulisy-scene';
+/** Shown on the strip: which code the page really runs (a stale browser cache is the first thing to rule out). */
+export const KULISY_BUILD = '0.1.7';
 /** Extension prompt key of the story calendar (today's events, what is coming). */
 export const CALENDAR_PROMPT_KEY = 'kulisy-calendar';
 /** The user's stage directions («пнуть» a character) for the coming reply only. */
@@ -18,6 +20,10 @@ export const DIRECTION_PROMPT_KEY = 'kulisy-direction';
 export const NAMES_PROMPT_KEY = 'kulisy-names';
 /** Open quests (core/quests.js): threads of the story that are in play. */
 export const QUESTS_PROMPT_KEY = 'kulisy-quests';
+/** Sheets of the library character cards attached to the chat's characters (card-prompt.js). */
+export const CARDS_PROMPT_KEY = 'kulisy-cards';
+/** Songs of the library that are playing, sung or quoted in the scene (core/song-library.js). */
+export const SONGS_PROMPT_KEY = 'kulisy-songs';
 
 export const DEFAULT_SETTINGS = Object.freeze({
   enabled: true,
@@ -45,6 +51,10 @@ export const DEFAULT_SETTINGS = Object.freeze({
   // Send the narrator the story calendar: the date, today's events and what is coming.
   sendCalendar: true,
   sendQuests: true,
+  // Library character cards (card-prompt.js): send their sections, and take the same character's lorebook sheet out so nothing goes twice.
+  sendCards: true,
+  cardsReplaceLore: true,
+  cardsPromptCharacters: 6000,
   // Weather line in the scene block (core/weather.js).
   sendWeather: true,
   // Calendar templates, shared by all chats (core/calendar.js toTemplate).
@@ -57,6 +67,8 @@ export const DEFAULT_SETTINGS = Object.freeze({
   // The intimacy dice (core/intimacy-dice.js): groups, hidden and own options, the last rolls. Shared by all chats.
   intimacyDice: { avoidRepeat: true, groups: {}, history: [] },
   nameLibrary: { version: 1, enabled: true, entries: [] },
+  // The song library (core/song-library.js): mood, sound and words of songs, shared by all chats.
+  songLibrary: { version: 1, enabled: true, folders: [], songs: [] },
   scenePromptCharacters: 1500,
   // How much of each wardrobe card's description, and of all a character wears, goes into the scene.
   looksCardCharacters: 300,
@@ -109,7 +121,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
     model: '',
     maxTokens: 4096,
     fallbackToMain: false,
-    purposes: { analysis: true, discovery: true, generation: true },
+    purposes: { analysis: true, discovery: true, generation: true, translation: true },
   },
   // Semantic choice of headcanons (see embeddings.js); off = pick by mentions.
   embeddings: {

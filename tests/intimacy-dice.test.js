@@ -58,7 +58,7 @@ test('groups can be switched off, options hidden, own options added and removed'
   assert.throws(() => updateDice(settings, { group: 'setting', addCustom: ' ' }), /Впишите/);
   assert.throws(() => updateDice(settings, { group: 'nope', off: true }), /группы/);
   assert.deepEqual(normalizeDice({ groups: { pace: { hidden: [1, 'x'], custom: [{ id: '', text: 'bad' }] } } }).groups.pace, { off: false, hidden: ['x'], custom: [] });
-  assert.equal(DICE_GROUPS.length, 7);
+  assert.equal(DICE_GROUPS.length, 8);
 });
 
 test('what was sent is remembered and comes up much more rarely', () => {
@@ -148,6 +148,7 @@ test('a roll keeps what is locked in a multi group whole, and the drawer gets ch
   assert.equal(groups.some(group => group.id === 'twist'), false, 'a group that is off is not shown');
   assert.deepEqual(groups.find(group => group.id === 'initiative').options.map(option => option.text), ['ведёт Ран', 'ведёт Майки']);
   assert.equal(groups.find(group => group.id === 'act').multi, true);
-  assert.equal(normalizeDice({}).auto, true);
-  assert.equal(normalizeDice(updateDice({}, { auto: false })).auto, false);
+  assert.equal(normalizeDice({}).autoRoll, false, 'nothing rolls by itself: what burns is what the user pressed');
+  assert.equal(normalizeDice({ auto: true }).autoRoll, false, 'the old «auto» switch is not carried over');
+  assert.equal(normalizeDice(updateDice({}, { autoRoll: true })).autoRoll, true);
 });

@@ -144,7 +144,7 @@ export function buildKnowledgeRequest(state, text, candidates, { knowledge = tru
       content: `Known character registry:
 ${JSON.stringify(roster)}
 ${personaId ? `The user persona is ${personaId}.
-` : ''}${knowledge ? buildKnowledgeBlock(state, text, candidates, { loreList }) : ''}${world ? buildWorldBlock(state, text, world.library ?? null, world.wardrobe ?? null, world.skipItemIds ?? null) : ''}
+` : ''}${knowledge ? buildKnowledgeBlock(state, text, candidates, { loreList }) : ''}${world ? buildWorldBlock(state, text, world.library ?? null, world.wardrobe ?? null, world.skipItemIds ?? null, world.weather ?? null) : ''}
 Scene (the reply to check):
 ---
 ${text}

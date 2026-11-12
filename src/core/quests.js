@@ -37,7 +37,11 @@ const newId = prefix => `${prefix}-${Date.now().toString(36)}${(counter++).toStr
 
 export function questId() { return newId('quest'); }
 
-function cleanSteps(steps) {
+/**
+ * Steps from loose input. A step without an ID gets `<quest>-sN`: the same input always gives the same IDs, because a journal
+ * is replayed to check the state, and an ID drawn at random would make the replay differ from the saved state.
+ */
+function cleanSteps(steps, seed = 'step') {
   if (!Array.isArray(steps)) return [];
   const result = [];
   for (const raw of steps) {
@@ -48,10 +52,14 @@ function cleanSteps(steps) {
     if (result.length >= QUEST_LIMITS.steps) break;
   }
   // Two steps never share an ID.
-  const seen = new Set();
+  const seen = new Set(result.map(step => step.id).filter(Boolean));
+  const used = new Set();
+  let counter = 0;
   for (const step of result) {
-    if (!step.id || seen.has(step.id)) step.id = newId('step');
-    seen.add(step.id);
+    if (!step.id || used.has(step.id)) {
+      do { counter += 1; step.id = `${seed}-s${counter}`; } while (seen.has(step.id) || used.has(step.id));
+    }
+    used.add(step.id);
   }
   return result;
 }
@@ -89,7 +97,7 @@ function applyFields(next, world, quest, fields) {
     quest.name = name;
   }
   if (fields.text != null) quest.text = clean(fields.text, QUEST_LIMITS.text);
-  if (fields.steps != null) quest.steps = cleanSteps(fields.steps);
+  if (fields.steps != null) quest.steps = cleanSteps(fields.steps, quest.id);
   if (fields.secret != null) { if (fields.secret) quest.secret = true; else delete quest.secret; }
   if (fields.knownByIds != null) {
     const ids = idList(fields.knownByIds, next);

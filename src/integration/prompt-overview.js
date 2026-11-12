@@ -14,7 +14,7 @@ const SCALE_LABELS = Object.fromEntries(DEFAULT_SCALES.map(scale => [scale.id, s
  * Order = the order the model meets them: the chronicle opens the request, the blocks near the end of the chat
  * come next, the stage direction is the very last.
  */
-export const BLOCK_ORDER = Object.freeze(['chronicle', 'scene', 'calendar', 'knowledge', 'names', 'quests', 'relationships', 'direction']);
+export const BLOCK_ORDER = Object.freeze(['chronicle', 'scene', 'calendar', 'knowledge', 'cards', 'names', 'quests', 'songs', 'relationships', 'direction']);
 
 const DESCRIPTIONS = Object.freeze({
   chronicle: {
@@ -53,6 +53,15 @@ const DESCRIPTIONS = Object.freeze({
     tab: ['events', 'Лента событий'],
     section: 'scene',
   },
+  cards: {
+    title: 'Карточки: кто эти люди',
+    what: 'Разделы карточек тех, кто сейчас в сцене или назван: основа, голос, внешность и так далее. Какие разделы уходят, решают правила «Суфлёра» (всегда, при выходе на сцену, в бою, по ключам…), поэтому в запрос идёт только нужное.',
+    source: 'Страница «Карточки» (Мир → Карточки): библиотека карточек, общая для всех чатов. Карточка работает в чате, где она включена.',
+    where: 'Рядом с последними сообщениями чата, перед самым последним.',
+    off: 'Настройки → «Знания и сцена» → «Карточки в промпт», либо выключить карточку в этом чате.',
+    tab: ['cards', 'Карточки'],
+    section: 'scene',
+  },
   names: {
     title: 'Имена: как писать и склонять',
     what: 'Написание и падежи имён тех, кто в сцене или назван в последних постах. Модель перестаёт путать написания и склонять имена как придётся.',
@@ -69,6 +78,15 @@ const DESCRIPTIONS = Object.freeze({
     where: 'Рядом с последними сообщениями чата, перед самым последним.',
     off: 'Отложить или закрыть квест; пока активных нет, блока нет.',
     tab: ['quests', 'Квесты'],
+    section: 'scene',
+  },
+  songs: {
+    title: 'Песни: как звучат и что поют',
+    what: 'Песни из библиотеки, которые сейчас в сцене: звучат, их поёт кто-то из героев или их строки процитированы в последних постах. Модель получает атмосферу, звучание и слова, поэтому описывает музыку и поёт без выдумок.',
+    source: 'Страница «Песни» (Мир → Песни): библиотека, общая для всех чатов, и плитка «Песни» в шторке (что звучит, кто поёт).',
+    where: 'Рядом с последними сообщениями чата, перед самым последним.',
+    off: 'Мир → Песни: переключатель «Отправлять песни», либо переключатель песни или папки. Узнанную по ошибке песню можно заглушить в шторке.',
+    tab: ['songs', 'Песни'],
     section: 'scene',
   },
   relationships: {
@@ -174,6 +192,8 @@ function readableScene(text) {
     if (plain && labels[plain[1]]) return { head: labels[plain[1]], text: plain[1] === 'time' ? humanTime(plain[2]) : plain[2] };
     const heat = /^scene heat:\s*(.*)$/.exec(line);
     if (heat) return { head: 'Накал сцены', text: heat[1] };
+    const stage = /^intimacy stage:\s*(.*)$/.exec(line);
+    if (stage) return { head: 'Стадия близости', text: stage[1] };
     return { head: '', text: line };
   });
   return { sections: [{ title: 'Состояние сцены', items }], rules };
@@ -295,7 +315,54 @@ function readableQuests(text) {
   return { sections: [{ title: 'Что в игре', items }], rules };
 }
 
-const READERS = { quests: readableQuests, chronicle: readableChronicle, scene: readableScene, calendar: readableCalendar, knowledge: readableKnowledge, names: readableNames, relationships: readableRelationships, direction: readableDirection };
+const SONG_LABELS = [[/^Now:/, 'Сейчас'], [/^Atmosphere:/, 'Атмосфера'], [/^Sound:/, 'Звучание'], [/^Lyrics[^:]*:/, 'Слова'], [/^Quoted so far:/, 'Допето до']];
+
+function songNow(text) {
+  const sung = /^(.+) is singing this song\.?$/.exec(text);
+  if (sung) return `поёт ${sung[1] === 'a character' ? 'кто-то из героев' : sung[1]}`;
+  if (/playing in the scene/.test(text)) return 'играет в сцене, слышно всем рядом';
+  if (/quoted in the recent posts/.test(text)) return 'её слова процитированы в последних постах';
+  return 'названа в последних постах';
+}
+
+function readableSongs(text) {
+  const { lines, rules } = unwrap(text);
+  const sections = [];
+  let song = null;
+  let words = null;
+  for (const line of lines) {
+    const head = /^##\s+(.+)$/.exec(line);
+    if (head) { song = { title: head[1], items: [] }; sections.push(song); words = null; continue; }
+    if (!song) continue;
+    const label = SONG_LABELS.find(([pattern]) => pattern.test(line));
+    if (label) {
+      const value = line.replace(/^[^:]+:\s*/, '');
+      const item = { head: label[1], text: label[1] === 'Сейчас' ? songNow(value) : value };
+      song.items.push(item);
+      words = label[1] === 'Слова' ? item : null;
+      continue;
+    }
+    if (words) words.text = `${words.text} / ${line.trim()}`.replace(/^\s*\/\s*/, '');
+  }
+  return { sections, rules };
+}
+
+function readableCards(text) {
+  const { lines, rules } = unwrap(text);
+  const sections = [];
+  let person = null;
+  let part = null;
+  for (const line of lines) {
+    const head = /^##\s+(.+)$/.exec(line);
+    const sub = /^###\s+(.+)$/.exec(line);
+    if (head && !line.startsWith('###')) { person = { title: head[1], items: [] }; sections.push(person); part = null; continue; }
+    if (sub && person) { part = { head: sub[1], text: '' }; person.items.push(part); continue; }
+    if (part) part.text = `${part.text} ${line.trim()}`.trim();
+  }
+  return { sections, rules };
+}
+
+const READERS = { songs: readableSongs, cards: readableCards, quests: readableQuests, chronicle: readableChronicle, scene: readableScene, calendar: readableCalendar, knowledge: readableKnowledge, names: readableNames, relationships: readableRelationships, direction: readableDirection };
 
 /** { sections: [{ title, items: [{ head, text, note?, chips? }] }], rules } — the same text, in words. */
 export function readable(id, text) {

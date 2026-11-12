@@ -66,8 +66,11 @@ import {
   removeNameFolder,
   updateNameFolder,
   buildNamesPrompt,
-  heatLevel, buildQuestsPrompt, cleanShifts, closingLine, closingShifts, currentStep, groupQuests, progressOf, questCue, questId, questsOf, dueText, daysLeft, QUEST_STATUSES,
+  addSong, addSongFolder, importSongs, muteSong, normalizeSongState, normalizeSongs, pinSong, planSongs, recentText, removeSongFolder, removeSongs, unmuteSong, unpinSong, updateSong, updateSongFolder,
+  INTIMACY_STAGES, aheadGroups, stageOf, heatLevel, buildQuestsPrompt, cleanShifts, closingLine, closingShifts, currentStep, groupQuests, progressOf, questCue, questId, questsOf, dueText, daysLeft, QUEST_STATUSES,
   normalizeNames,
+  personalPieces,
+  recognitionForms,
   removeName,
   updateName,
   wordsToFill,
@@ -93,7 +96,7 @@ import {
 import { analyzeHistoryBatch, analyzeKnowledge, analyzeMessage, discoverHistoryCharacters } from './src/integration/analyzer.js';
 import { selectKnowledgeCandidates } from './src/integration/knowledge-analysis.js';
 import { detectConflicts } from './src/integration/conflicts.js';
-import { clearRelationshipPrompt, updateCalendarPrompt, updateDirectionPrompt, updateChroniclePrompt, updateKnowledgePrompt, updateNamesPrompt, updateQuestsPrompt, updateRelationshipPrompt, updateScenePrompt } from './src/integration/prompt.js';
+import { clearRelationshipPrompt, updateCalendarPrompt, updateCardsPrompt, updateDirectionPrompt, updateChroniclePrompt, updateKnowledgePrompt, updateNamesPrompt, updateQuestsPrompt, updateRelationshipPrompt, updateScenePrompt, updateSongsPrompt } from './src/integration/prompt.js';
 import { fillNameForms } from './src/integration/name-forms.js';
 import { generateClimate } from './src/integration/weather-generation.js';
 import { generateCalendarTemplate } from './src/integration/calendar-generation.js';
@@ -101,6 +104,9 @@ import { buildScenePrompt, looksFit, newlyDropped } from './src/integration/worl
 import { createReminders, createWorldCallbacks } from './src/integration/world-actions.js';
 import { linkedCards } from './src/integration/location-links.js';
 import { linkedItems } from './src/integration/item-links.js';
+import { cardLinks, cardNameForms, cardsByEntity, closetsByEntity } from './src/integration/card-links.js';
+import { cardedSheetTest, digestFor, planCards, planSheetDrops } from './src/integration/card-prompt.js';
+import { translateSections } from './src/integration/card-translate.js';
 import { dormantItemIds } from './src/integration/item-tidy.js';
 import { aliasOperations, aliasesFromBooks } from './src/integration/name-sources.js';
 import { createWardrobeCallbacks, createWardrobeStore } from './src/integration/wardrobe-actions.js';
@@ -114,7 +120,7 @@ import { countImages, moveImages } from './src/integration/image-move.js';
 import { TEST_IMAGE, TEST_PROMPT, askAboutImage, listVisionChoices, visionSettings } from './src/integration/vision.js';
 import { hideSummarized } from './src/integration/chronicle-run.js';
 import { createChronicleRunner } from './src/integration/chronicle-actions.js';
-import { getSettings } from './src/integration/settings.js';
+import { getSettings, KULISY_BUILD, SCENE_PROMPT_KEY } from './src/integration/settings.js';
 import { createHistoryBatches, rebuildWithoutAutomaticHistory, historyFingerprint, sampleHistory } from './src/integration/history.js';
 import { applyAnalysisResult, describeProposedChanges, tempoDelta } from './src/integration/analysis-operations.js';
 import { loadLinkedLore, loadGroupLore, generationBooks, analyzeLorebookCharacters, canonKeys, namesMatch } from './src/integration/lorebooks.js';
@@ -141,7 +147,7 @@ import { openSecretDialog } from './src/integration/secret-dialog.js';
 import { mountSelectionChip } from './src/integration/selection-chip.js';
 import { DEFAULT_LOCAL_MODEL, LOCAL_MODELS, cosine, embedTexts } from './src/integration/embeddings.js';
 import { createChatStorage } from './src/integration/storage.js';
-import { createLibraryCallbacks, createLocationLibraryStore, syncChat } from './src/integration/location-library-actions.js';
+import { createLibraryCallbacks, createLocationLibraryStore, syncChat, syncChatCards } from './src/integration/location-library-actions.js';
 import { createRelationshipStudio } from './src/ui/studio.js';
 import { createRelationshipWidget } from './src/ui/widget.js';
 
@@ -153,7 +159,7 @@ function messageMarker(message) {
   return message?.extra?.[MESSAGE_EXTRA_KEY] ?? message?.extra?.[LEGACY_MESSAGE_EXTRA_KEY];
 }
 /** Plain on/off preferences edited as checkboxes in the Studio settings. */
-const TOGGLE_SETTINGS = ['linkedScales', 'autoCharacterLines', 'confirmPersonaLines', 'sendMemories', 'sendTensions', 'sendFactors', 'sendHeadcanons', 'autoHeadcanons', 'trackKnowledge', 'trackWorld', 'sendScene', 'sendCalendar', 'sendQuests', 'injectPrompt', 'confirmLargeChanges', 'knowledgeSeparateRequest', 'sendKnowledge', 'sceneChips'];
+const TOGGLE_SETTINGS = ['linkedScales', 'autoCharacterLines', 'confirmPersonaLines', 'sendMemories', 'sendTensions', 'sendFactors', 'sendHeadcanons', 'autoHeadcanons', 'trackKnowledge', 'trackWorld', 'sendScene', 'sendCalendar', 'sendQuests', 'sendCards', 'cardsReplaceLore', 'injectPrompt', 'confirmLargeChanges', 'knowledgeSeparateRequest', 'sendKnowledge', 'sceneChips'];
 let controller = null;
 
 function normalizeEmbeddings(config) {
@@ -208,7 +214,21 @@ export async function init() {
     redrawSoon = true;
     queueMicrotask(() => { redrawSoon = false; try { notify(); } catch (error) { console.error('[Kulisy] Redraw after a store change failed.', error); } });
   };
-  const locationLibrary = createLocationLibraryStore({ settings: () => settings, save: () => context.saveSettingsDebounced(), onChange: storeChanged });
+  // A card edited in the library changes what the narrator is sent: the prompt is rebuilt too.
+  let promptSoon = false;
+  const locationLibrary = createLocationLibraryStore({
+    settings: () => settings,
+    save: () => context.saveSettingsDebounced(),
+    onChange: () => {
+      storeChanged();
+      if (promptSoon) return;
+      promptSoon = true;
+      queueMicrotask(() => {
+        promptSoon = false;
+        try { refreshPrompt(); } catch (error) { console.error('[Kulisy] Prompt refresh after a library change failed.', error); }
+      });
+    },
+  });
   const wardrobeStore = createWardrobeStore({ settings: () => settings, save: () => context.saveSettingsDebounced(), onChange: storeChanged });
   // Corrections after a slip, sent with the next reply only.
   const reminders = createReminders();
@@ -264,6 +284,7 @@ export async function init() {
         knowledgeCandidates: settings.knowledgeCandidates,
         knowledgePromptCharacters: settings.knowledgePromptCharacters,
         scenePromptCharacters: settings.scenePromptCharacters,
+        cardsPromptCharacters: settings.cardsPromptCharacters,
         looksCardCharacters: settings.looksCardCharacters,
         looksCharacterCharacters: settings.looksCharacterCharacters,
         itemsDormantAfter: settings.itemsDormantAfter ?? 40,
@@ -293,7 +314,11 @@ export async function init() {
       calendarSystems: calendarLibrary(),
       calendarTemplates: normalizeTemplates(settings.calendarTemplates),
       names: normalizeNames(settings.nameLibrary),
-      dice: { avoidRepeat: normalizeDice(settings.intimacyDice).avoidRepeat, auto: normalizeDice(settings.intimacyDice).auto, groups: describeGroups(settings.intimacyDice), historyCount: normalizeDice(settings.intimacyDice).history.length },
+      songs: normalizeSongs(settings.songLibrary),
+      songsChat: normalizeSongState(state.ui?.songs, { songIds: normalizeSongs(settings.songLibrary).songs.map(song => song.id) }),
+      songsReport,
+      songsTokens,
+      dice: { rollMode: normalizeDice(settings.intimacyDice).rollMode, avoidRepeat: normalizeDice(settings.intimacyDice).avoidRepeat, autoRoll: normalizeDice(settings.intimacyDice).autoRoll, groups: describeGroups(settings.intimacyDice), historyCount: normalizeDice(settings.intimacyDice).history.length },
       weather: currentWeather(state),
       weatherSet: state.world?.weather ?? null,
       weatherPlan: normalizePlan(state.ui?.weatherPlan),
@@ -310,16 +335,18 @@ export async function init() {
       reveals: openReveals(),
       promptBlocks: describeBlocks({
         parts: promptParts,
-        tokens: { chronicle: chronicleTokens, scene: sceneTokens, calendar: calendarTokens, knowledge: knowledgeTokens, names: namesTokens, quests: questsTokens, relationships: promptTokens, direction: directionTokens },
+        tokens: { chronicle: chronicleTokens, scene: sceneTokens, calendar: calendarTokens, knowledge: knowledgeTokens, cards: cardsTokens, names: namesTokens, quests: questsTokens, songs: songsTokens, relationships: promptTokens, direction: directionTokens },
         enabled: settings.enabled ? {
           chronicle: chronicleConfig(settings.chronicle).enabled ? true : 'Хроника выключена: сводки не пишутся и не уходят модели.',
           scene: settings.sendScene !== false && settings.trackWorld !== false ? true : 'Выключено: «Сцена в промпт» или слежение за миром.',
           calendar: settings.sendCalendar !== false ? true : 'Выключено: «Календарь в промпт».',
           knowledge: settings.sendKnowledge !== false ? true : 'Выключено: «Знания в промпт».',
+          cards: settings.sendCards !== false ? true : 'Выключено: «Карточки в промпт» (Настройки → Знания и сцена).',
           names: state.ui?.namesOff ? 'Выключено в этом чате (Мир → Имена).' : normalizeNames(settings.nameLibrary).enabled ? true : 'Выключено: переключатель «Отправлять имена» (Мир → Имена).',
           quests: settings.sendQuests !== false ? true : 'Выключено: «Квесты в промпт» (Настройки → Знания и сцена).',
+          songs: normalizeSongs(settings.songLibrary).enabled ? true : 'Выключено: переключатель «Отправлять песни» (Мир → Песни).',
           relationships: settings.injectPrompt ? true : 'Выключено: отправка отношений.',
-        } : Object.fromEntries(['chronicle', 'scene', 'calendar', 'knowledge', 'names', 'quests', 'relationships', 'direction'].map(id => [id, 'Кулисы выключены.'])),
+        } : Object.fromEntries(['chronicle', 'scene', 'calendar', 'knowledge', 'cards', 'names', 'quests', 'songs', 'relationships', 'direction'].map(id => [id, 'Кулисы выключены.'])),
       }),
       tidy: { autoSecrets: autoSecrets(state).length, foldable: duplicateBuckets(state).reduce((sum, bucket) => sum + bucket.events.length, 0) },
       dossiers: Object.fromEntries(Object.keys(state.entities).map(id => [id, dossier(state, id)])),
@@ -330,12 +357,16 @@ export async function init() {
       locationLibrary: locationLibrary.get(),
       linkedLocationIds: [...linkedCards(state).keys()],
       linkedItemIds: [...linkedItems(state).keys()],
+      linkedCharacterIds: [...cardLinks(state).keys()],
+      cardByEntity: Object.fromEntries([...cardsByEntity(state, locationLibrary.get())].map(([entityId, card]) => [entityId, { id: card.id, name: card.name }])),
+      cardsReport,
+      cardsTokens,
       chatKey: String(SillyTavern.getContext().getCurrentChatId?.() ?? ''),
       wardrobe: wardrobeStore.get(),
       inbox: { ...inboxInfo },
       looksFit: looksStatus(state),
       dormantItemIds: shadeItems(state),
-      duplicates: duplicateCandidates(state).map(pair => ({ ...pair, fromName: state.entities[pair.fromId]?.name ?? '', intoName: state.entities[pair.intoId]?.name ?? '' })),
+      duplicates: cachedDuplicates(state).map(pair => ({ ...pair, fromName: state.entities[pair.fromId]?.name ?? '', intoName: state.entities[pair.intoId]?.name ?? '' })),
       scaleLabels: Object.fromEntries((state.config?.scales ?? []).map(scale => [scale.id, scale.label])),
       visionChoices: listVisionChoices(SillyTavern.getContext(), settings.wardrobeVision),
       analysisTokens: getAnalysisTokenUsage(),
@@ -358,6 +389,18 @@ export async function init() {
 
   // Set once the chat overlay is mounted (end of init); a no-op before that.
   let refreshChatOverlay = () => {};
+
+  // Twin characters are found by comparing every name with every other: on each redraw that was the heaviest thing Kulisy did
+  // (the panel lagged on every reply). The answer only changes with the names, the lines, the history or the «different people» marks.
+  let duplicatesMemo = { key: '', value: [] };
+  function cachedDuplicates(source) {
+    const key = JSON.stringify([
+      Object.values(source.entities ?? {}).map(entity => [entity.id, entity.name, entity.aliases]),
+      source.ui?.distinctPairs ?? [], Object.keys(source.relationships ?? {}).length, (source.operations ?? []).length,
+    ]);
+    if (duplicatesMemo.key !== key) duplicatesMemo = { key, value: duplicateCandidates(source) };
+    return duplicatesMemo.value;
+  }
 
   function notify() {
     for (const subscriber of subscribers) {
@@ -412,6 +455,13 @@ export async function init() {
   let knowledgeTokens = 0;
   let namesTokens = 0;
   let questsTokens = 0;
+  // Songs of the library that are in the scene (core/song-library.js): the last decision, for the drawer and the page.
+  let songsTokens = 0;
+  let songsReport = null;
+  let cardsTokens = 0;
+  // Character cards (card-prompt.js): when each character's «entrance» sections last went out, and the last decision for the page.
+  const cardTracker = new Map();
+  let cardsReport = null;
   let chronicleTokens = 0;
   let sceneTokens = 0;
   let calendarTokens = 0;
@@ -489,8 +539,12 @@ export async function init() {
   // A book linked to Kulisy only is read by the analyzer, but the model never gets it.
   let tavernBooks = null;
   // The blocks as they were last handed to SillyTavern, for «Что получает модель».
-  const promptParts = { chronicle: '', scene: '', calendar: '', knowledge: '', names: '', quests: '', relationships: '', direction: '' };
+  const promptParts = { chronicle: '', scene: '', calendar: '', knowledge: '', cards: '', names: '', quests: '', songs: '', relationships: '', direction: '' };
   let directionTokens = 0;
+  /** Whoever a stage cue is bringing in counts as on stage for this reply. */
+  function calledIds() {
+    return directionState().cues.flatMap(cue => (cue.kind === 'call' || cue.kind === 'enter' ? [cue.entityId] : cue.kind === 'scene' ? (cue.castIds ?? []) : []));
+  }
   /** The user's fresh post and the reply before it, apart: a name in the post weighs more than one in the reply. A reply being swiped is not counted. */
   function gateTexts(chat) {
     const messages = (chat ?? []).filter(message => message && !message.is_system);
@@ -667,6 +721,28 @@ export async function init() {
     knowledgeTokens = knowledge ? countTokens(knowledge) : 0;
     promptParts.knowledge = knowledge;
     updateKnowledgePrompt(ctx, knowledge);
+    // Sheets of the library character cards attached to the characters in play (the lorebook prompter's rules decide which sections).
+    let cardsBlock = '';
+    cardsReport = null;
+    try {
+      if (settings.enabled && settings.sendCards !== false) {
+        const planned = planCards({
+          state, library: locationLibrary.get(), config: settings.loreGate,
+          presentIds: [...presentIds(state), ...calledIds()],
+          mode: state.world?.clock?.mode ?? 'calm',
+          turn: (ctx.chat ?? []).filter(message => message?.is_user && !message.is_system).length,
+          tracker: cardTracker,
+          extraNames: cardNameForms(state, locationLibrary.get(), normalizeNames(settings.nameLibrary), recognitionForms),
+          maxCharacters: Math.max(500, Math.min(20000, Number(settings.cardsPromptCharacters) || 6000)),
+          ...gateTexts(ctx.chat),
+        });
+        cardsBlock = planned.block;
+        cardsReport = planned.report;
+      }
+    } catch (error) { console.error('[Kulisy] Character cards prompt failed.', error); }
+    cardsTokens = cardsBlock ? countTokens(cardsBlock) : 0;
+    promptParts.cards = cardsBlock;
+    updateCardsPrompt(ctx, cardsBlock);
     // Spelling and case forms of the names on stage and of those said in the last posts.
     let namesBlock = '';
     try {
@@ -687,6 +763,23 @@ ${replyText}` });
     questsTokens = questsBlock ? countTokens(questsBlock) : 0;
     promptParts.quests = questsBlock;
     updateQuestsPrompt(ctx, questsBlock);
+    // Songs of the library that play, are sung or were quoted in the last posts.
+    let songsBlock = '';
+    songsReport = null;
+    try {
+      if (settings.enabled) {
+        const library = normalizeSongs(settings.songLibrary);
+        const planned = planSongs({
+          library, text: recentText(ctx.chat, library.lookback), songState: state.ui?.songs,
+          nameOf: id => state.entities[id]?.name ?? '',
+        });
+        songsBlock = planned.block;
+        songsReport = planned.report;
+      }
+    } catch (error) { console.error('[Kulisy] Songs prompt failed.', error); }
+    songsTokens = songsBlock ? countTokens(songsBlock) : 0;
+    promptParts.songs = songsBlock;
+    updateSongsPrompt(ctx, songsBlock);
     if (!settings.enabled || !settings.injectPrompt) {
       promptTokens = 0;
       promptParts.relationships = '';
@@ -834,7 +927,7 @@ ${replyText}` });
       const limit = Math.round(Number(patch.headcanonLimit));
       if (Number.isFinite(limit)) settings.headcanonLimit = Math.max(1, Math.min(30, limit));
     }
-    for (const [key, min, max] of [['scenePromptCharacters', 300, 6000], ['largeChangeThreshold', 4, 25], ['itemsDormantAfter', 0, 500], ['looksCardCharacters', 80, 1000], ['looksCharacterCharacters', 200, 4000]]) {
+    for (const [key, min, max] of [['scenePromptCharacters', 300, 6000], ['cardsPromptCharacters', 500, 20000], ['largeChangeThreshold', 4, 25], ['itemsDormantAfter', 0, 500], ['looksCardCharacters', 80, 1000], ['looksCharacterCharacters', 200, 4000]]) {
       if (!Object.hasOwn(patch, key)) continue;
       const value = Math.round(Number(patch[key]));
       if (Number.isFinite(value)) settings[key] = Math.max(min, Math.min(max, value));
@@ -866,13 +959,27 @@ ${replyText}` });
 
   /** Lorebooks bound to the current card(s) in SillyTavern (card's "world"). */
   /** Lore about these characters from every book of the chat, for generation (factors, end points, headcanons). */
-  function loreAbout(ids) {
+  async function loreAbout(ids) {
     const ctx = SillyTavern.getContext();
     // The persona's own lorebook too: when the persona is one of the pair, it is the main source about her.
     const persona = personaBookName();
     const books = [...new Set([...generationBooks(ctx, state, cardWorldNames()), ...(persona ? [persona] : [])])];
-    return loadGroupLore(ctx, state, ids, { books, matchKeys: matchingKeys });
+    const lore = await loadGroupLore(ctx, state, ids, { books, matchKeys: matchingKeys, skipEntry: sheetSkip(state) });
+    return withCardSheets(lore, state, ids);
   }
+
+  /** The test for lorebook entries that a library card replaces (null when cards do not replace the lorebook). */
+  function sheetSkip(source) {
+    if (settings.sendCards === false || settings.cardsReplaceLore === false) return null;
+    try { return cardedSheetTest(source, locationLibrary.get()); } catch (error) { logEvent('warn', 'Не удалось отделить анкеты карточек от лорбука', error); return null; }
+  }
+
+  /** Library cards of these characters as lore for a model that analyses or generates (never the NSFW section; no more than `total` characters). */
+  function cardLore(source, ids, total = 9000) {
+    try { return digestFor(source, locationLibrary.get(), ids, total); }
+    catch (error) { logEvent('warn', 'Карточки не добавлены к знаниям о персонажах', error); return ''; }
+  }
+  const withCardSheets = (lore, source, ids, total) => [cardLore(source, ids, total), lore].filter(Boolean).join('\n\n');
 
   /** The chat's calendar, tidy (characters removed since are dropped from «who»). */
   function calendarOf(source = state) {
@@ -1044,10 +1151,39 @@ ${replyText}` });
   }
 
   // The roll of the intimacy dice for this chat: what burns in the drawer, what is locked, whether it went out as a direction.
-  let diceNow = { picks: [], locked: [], sent: false, recorded: false };
-  const resetDice = () => { diceNow = { picks: [], locked: [], sent: false, recorded: false }; };
-  const diceView = () => (state.world?.clock?.mode === 'intim'
-    ? { groups: viewGroups(settings.intimacyDice, diceNpcs()), picks: diceNow.picks.map(pick => ({ group: pick.group, id: pick.id, text: pick.text })), locked: diceNow.locked, sent: diceNow.sent }
+  let diceNow = { picks: [], locked: [], released: [], sent: false, recorded: false };
+  const resetDice = () => { diceNow = { picks: [], locked: [], released: [], sent: false, recorded: false }; };
+  /** A pick from a later stage than the scene is at waits («ahead») unless the user let it through. */
+  const isAhead = pick => {
+    const stage = state.world?.intimacy?.stage;
+    return Boolean(stage) && aheadGroups(stage).includes(pick.group) && !diceNow.released.includes(`${pick.group}:${pick.id}`);
+  };
+  // What really went to the model with the last generation, read back from the prompt blocks at that moment:
+  // shown on the strip, so that «did it work» can be checked by eye instead of guessed.
+  let lastSent = null;
+  function recordSent(type) {
+    try {
+      const prompts = SillyTavern.getContext().extensionPrompts ?? {};
+      const scene = String(prompts[SCENE_PROMPT_KEY]?.value ?? '');
+      const stageId = /intimacy stage: \d\/\d (\w+)/.exec(scene)?.[1];
+      const nameOf = id => state.entities?.[id]?.name ?? id;
+      lastSent = {
+        at: Date.now(),
+        type: String(type ?? ''),
+        stage: stageId ? { label: stageOf(stageId)?.label ?? stageId, note: state.world?.intimacy?.note ?? '' } : null,
+        cues: directionState().cues.filter(cue => cue.used).map(cue => `${cueBadge(cue)} ${cueLabel(cue, nameOf)}`),
+      };
+      refreshChatOverlay();
+    } catch (error) { console.error('[Kulisy] Could not record what was sent.', error); }
+  }
+  /** The ladder of the intimate scene for the drawer (core/intimacy-stage.js). */
+  const stageView = () => {
+    const found = state.world?.intimacy;
+    const stage = stageOf(found?.stage);
+    return { id: stage?.id ?? '', label: stage?.label ?? '', hint: stage?.hint ?? '', ru: stage?.ru ?? '', lock: Boolean(found?.lock), why: found?.why ?? '', note: found?.note ?? '', stages: INTIMACY_STAGES.map(({ id, label, icon, hint }) => ({ id, label, icon, hint })) };
+  };
+  const diceView = () => (state.world?.clock?.mode === 'intim' || state.world?.intimacy
+    ? { rollMode: normalizeDice(settings.intimacyDice).rollMode, stage: stageView(), groups: viewGroups(settings.intimacyDice, diceNpcs()), picks: diceNow.picks.map(pick => ({ group: pick.group, id: pick.id, text: pick.text, ahead: isAhead(pick) })), locked: diceNow.locked, sent: diceNow.sent }
     : null);
 
   /** The roll goes out as a stage direction for the next reply (a new one replaces the old). */
@@ -1058,7 +1194,8 @@ ${replyText}` });
       const personaId = state.ui?.personaId ?? '';
       const safe = diceNow.picks.filter(pick => pick.id !== `npc:${personaId}`);
       if (!safe.length) throw new Error('Нечего отправлять: сначала бросьте кубик.');
-      await saveDirection(armCue(directionState(), { kind: 'dice', ...diceCue(safe), id: uniqueId('cue') }, Object.keys(state.entities)));
+      const stageId = state.world?.intimacy?.stage ?? '';
+      await saveDirection(armCue(directionState(), { kind: 'dice', ...diceCue(safe.map(pick => ({ ...pick, ahead: isAhead(pick) })), { stage: stageId }), id: uniqueId('cue') }, Object.keys(state.entities)));
       settings.intimacyDice = recordDice(settings.intimacyDice, safe, { replaceLast: diceNow.recorded });
       context.saveSettingsDebounced();
       diceNow.sent = true;
@@ -1072,11 +1209,24 @@ ${replyText}` });
   }
   /** After a change by hand: when the roll is already out, it goes out again as it is now. */
   async function diceChanged() {
-    if (diceNow.sent) { if (diceNow.picks.length) await diceSend(); else await diceClear(); } else refreshChatOverlay();
+    // What burns goes out at once: no separate «send» step to forget.
+    if (!settings.enabled) { refreshChatOverlay(); return; }
+    if (diceNow.picks.length) await diceSend(); else await diceClear();
   }
   async function diceRoll(only) {
     const keep = diceNow.picks.filter(pick => diceNow.locked.includes(pick.group) || (only && pick.group !== only));
-    diceNow.picks = rollDice(settings.intimacyDice, { npcs: diceNpcs(), keep, only });
+    diceNow.picks = rollDice(settings.intimacyDice, { npcs: diceNpcs(), keep, only, stage: state.world?.intimacy?.stage ?? '' });
+    await diceChanged();
+  }
+  /** After the stage moved: a roll that is already out goes out again, so what waited ahead comes alive. */
+  async function diceResend() {
+    if (diceNow.sent && diceNow.picks.length) await diceSend({ quiet: true });
+    else refreshChatOverlay();
+  }
+  /** «Сейчас» on a pick that waits ahead: it goes to the narrator without waiting for its stage. */
+  async function diceRelease(group, option) {
+    const key = `${group}:${option}`;
+    if (!diceNow.released.includes(key)) diceNow.released = [...diceNow.released, key];
     await diceChanged();
   }
   async function diceToggle(group, option) {
@@ -1110,10 +1260,11 @@ ${replyText}` });
   async function autoDice(before, after) {
     const was = before?.world?.clock?.mode;
     const now = after?.world?.clock?.mode;
+    // The scene type went back to «Быт»: the roll is dropped, but the ladder stays: only «Сцена закончена» takes it away.
     if (was === 'intim' && now !== 'intim') { resetDice(); return; }
-    if (now !== 'intim' || was === 'intim' || !settings.enabled || !normalizeDice(settings.intimacyDice).auto) return;
+    if (now !== 'intim' || was === 'intim' || !settings.enabled || !normalizeDice(settings.intimacyDice).autoRoll) return;
     resetDice();
-    diceNow.picks = rollDice(settings.intimacyDice, { npcs: diceNpcs() });
+    diceNow.picks = rollDice(settings.intimacyDice, { npcs: diceNpcs(), stage: state.world?.intimacy?.stage ?? '' });
     if (!diceNow.picks.length) return;
     if (await diceSend({ quiet: true })) globalThis.toastr?.info?.(`🎲 ${diceCue(diceNow.picks).text}`, 'Кубик близости');
     refreshChatOverlay();
@@ -1217,11 +1368,74 @@ ${replyText}` });
     },
   };
 
+  /** The song library (Мир → Песни): shared by all chats, kept in the settings; the chat only pins and mutes songs (onSongChat). */
+  const songsCallbacks = {
+    onSongAdd: ({ title, artist, folderId }) => {
+      let made = null;
+      saveSongs(library => { made = addSong(library, { title, artist, folderId }); return made.library; });
+      return made.song;
+    },
+    onSongUpdate: ({ id, patch }) => saveSongs(library => updateSong(library, id, patch)),
+    onSongRemove: ({ ids }) => saveSongs(library => removeSongs(library, ids ?? [])),
+    onSongFolderAdd: ({ name }) => {
+      let made = null;
+      saveSongs(library => { made = addSongFolder(library, name); return made.library; });
+      return made.folder;
+    },
+    onSongFolderUpdate: ({ id, name, off }) => saveSongs(library => updateSongFolder(library, id, { ...(name !== undefined ? { name } : {}), ...(off !== undefined ? { off } : {}) })),
+    onSongFolderRemove: ({ id }) => saveSongs(library => removeSongFolder(library, id)),
+    /** { enabled, minWords, lookback, maxCharacters }: only what is given; the library clamps the numbers. */
+    onSongsSettings: ({ enabled, minWords, lookback, maxCharacters }) => saveSongs(library => normalizeSongs({
+      ...library,
+      ...(enabled !== undefined ? { enabled: Boolean(enabled) } : {}),
+      ...(minWords !== undefined ? { minWords } : {}),
+      ...(lookback !== undefined ? { lookback } : {}),
+      ...(maxCharacters !== undefined ? { maxCharacters } : {}),
+    })),
+    onSongsImport: ({ data }) => {
+      let result = null;
+      saveSongs(library => { result = importSongs(library, data); return result.library; });
+      return { added: result.added, skipped: result.skipped };
+    },
+    /** What this chat does with a song: { op: 'pin' | 'unpin' | 'mute' | 'unmute', songId, mode, singerId }. */
+    onSongChat: async ({ op, songId, mode, singerId }) => {
+      const ids = normalizeSongs(settings.songLibrary).songs.map(song => song.id);
+      let current = normalizeSongState(state.ui?.songs, { songIds: ids });
+      if (op === 'pin') current = pinSong(current, songId, { mode, singerId });
+      else if (op === 'unpin') current = unpinSong(current, songId);
+      else if (op === 'mute') current = muteSong(current, songId);
+      else if (op === 'unmute') current = unmuteSong(current, songId);
+      else return false;
+      const next = structuredClone(state);
+      next.ui ??= {};
+      if (current.playing.length || current.muted.length) next.ui.songs = current; else delete next.ui.songs;
+      await commit(next, true);
+      return true;
+    },
+  };
+
+  function saveSongs(change) {
+    settings.songLibrary = change(normalizeSongs(settings.songLibrary));
+    context.saveSettingsDebounced();
+    refreshPrompt();
+    notify();
+  }
+
   function saveNames(change) {
     settings.nameLibrary = change(normalizeNames(settings.nameLibrary));
     context.saveSettingsDebounced();
     refreshPrompt();
     notify();
+  }
+
+  /**
+   * The wardrobe as the chronicler sees it: the cards and looks, and `closets` — entityId → { cardIds, lookIds } of the characters
+   * whose library card has things tied to it (what they own: the AI changes their clothes from there).
+   */
+  function wardrobeFor(forState) {
+    const base = wardrobeStore.get();
+    const closets = closetsByEntity(forState, locationLibrary.get(), base, personalPieces);
+    return Object.keys(closets).length ? { ...base, closets } : base;
   }
 
   /** How the model read the pair for the last factors of a line: shown in its «Факторы роста». */
@@ -1512,7 +1726,7 @@ ${replyText}` });
       next.ui.personaId = personaMatch.id;
     }
     onProgress('Читаю подходящие записи подключённых лорбуков…');
-    const loreContext = await loadLinkedLore(ctx, next);
+    const loreContext = withCardSheets(await loadLinkedLore(ctx, next, undefined, { skipEntry: sheetSkip(next) }), next, presentIds(next), 5000);
     assertCurrent();
 
     for (let batchIndex = 0; batchIndex < batches.length; batchIndex += 1) {
@@ -1727,6 +1941,12 @@ ${replyText}` });
         } else if (hint.kind === 'step') {
           if (!quest || quest.status !== 'active' || quest.steps.find(step => step.id === hint.stepId)?.done !== false) continue;
           hints.push({ messageIndex, id: hint.id, title: `Шаг квеста «${quest.name}» сделан?`, detail: `«${hint.stepText}»`, confirm: 'Отметить шаг', confirmTitle: 'Отметить шаг выполненным' });
+        } else if (hint.kind === 'stage') {
+          // The intimate stage is proposed on the same plaque; it counts only while it still fits the scene.
+          const current = state.world?.intimacy;
+          const to = stageOf(hint.to);
+          if (!to || current?.lock || (current?.stage ?? null) !== (hint.from ?? null)) continue;
+          hints.push({ messageIndex, id: hint.id, icon: 'fa-heart', title: `Сцена дошла до стадии «${to.label}»?`, detail: [hint.why, 'Рассказчик будет писать только эту стадию.'].filter(Boolean).join(' '), confirm: `Перейти: ${to.label}`, confirmTitle: 'Поставить эту стадию: рассказчик пишет только её, один шаг за ответ' });
         } else if (hint.kind === 'end') {
           if (!quest || quest.status !== 'active') continue;
           const label = hint.status === 'done' ? 'выполнен' : 'провален';
@@ -2122,6 +2342,8 @@ ${replyText}` });
       const operations = [];
       if (hint.kind === 'new') {
         operations.push(createOperation('quest.add', { item: { id: questId(), name: hint.name, text: hint.text, steps: hint.steps ?? [] } }, meta(`Новый квест: ${hint.name}`)));
+      } else if (hint.kind === 'stage') {
+        operations.push(createOperation('intimacy.set', { stage: hint.to, why: hint.why ?? '' }, meta(`Стадия близости: ${stageOf(hint.to)?.label ?? hint.to}`)));
       } else if (hint.kind === 'step') {
         if (!quest) throw new Error('Квест уже удалён.');
         operations.push(createOperation('quest.step', { questId: quest.id, stepId: hint.stepId, done: true }, meta(`Квест «${quest.name}»: шаг выполнен`)));
@@ -2138,6 +2360,7 @@ ${replyText}` });
       await forgetQuestHint(messageIndex, hintId);
       refreshPrompt();
       notify();
+      if (hint.kind === 'stage') await diceResend();
     },
     onQuestHintDismiss: async ({ messageIndex, hintId }) => {
       await forgetQuestHint(messageIndex, hintId);
@@ -2176,6 +2399,7 @@ ${replyText}` });
     library: locationLibrary,
     getState: () => state,
     commitOperations: operations => commit(applyOperations(state, operations), true),
+    replaceState: next => commit(next, true),
     confirm: async (title, text) => {
       const ctx = SillyTavern.getContext();
       return (await ctx.Popup.show.confirm(title, escapeHtml(text))) === ctx.POPUP_RESULT.AFFIRMATIVE;
@@ -2192,6 +2416,8 @@ ${replyText}` });
     removeImage: path => deleteWardrobeImage(SillyTavern.getContext(), path),
     imageForModel: path => storedImageForModel(path),
     ask: (dataUrl, prompt) => askPicture(dataUrl, prompt),
+    names: { get: () => normalizeNames(settings.nameLibrary), change: change => saveNames(change) },
+    translateSections: (sections, onProgress) => translateSections(routedContext(SillyTavern.getContext(), settings, 'translation'), sections, onProgress),
     log: (level, text, error) => logEvent(level, text, error),
   });
 
@@ -2347,6 +2573,7 @@ ${card.personality ?? card.data?.personality ?? ''}`;
     }
     const personaId = state.ui?.personaId;
     if (personaId) extra[personaId] = String(ctx.powerUserSettings?.persona_description ?? '');
+    for (const entityId of cardsByEntity(state, locationLibrary.get()).keys()) extra[entityId] = `${extra[entityId] ?? ''}\n${digestFor(state, locationLibrary.get(), [entityId], 6000)}`;
     const guesses = guessGenders(state, books, extra);
     if (!Object.keys(guesses).length) return;
     const next = structuredClone(state);
@@ -2408,6 +2635,7 @@ ${card.personality ?? card.data?.personality ?? ''}`;
     ...knowledgeCallbacks,
     ...calendarCallbacks,
     ...namesCallbacks,
+    ...songsCallbacks,
     ...weatherCallbacks,
     ...diceCallbacks,
     ...questCallbacks,
@@ -3085,7 +3313,7 @@ ${card.personality ?? card.data?.personality ?? ''}`;
     // events it is about to roll back would leave them out, and they would be lost.
     const sourceState = state.operations.some(operation => operation.messageId === String(messageIndex))
       ? rollbackMessage(state, String(messageIndex)) : state;
-    const loreContext = await loadLinkedLore(ctx, sourceState);
+    const loreContext = withCardSheets(await loadLinkedLore(ctx, sourceState, undefined, { skipEntry: sheetSkip(sourceState) }), sourceState, presentIds(sourceState), 5000);
     if (expectedEpoch !== chatEpoch) return skip('чат сменился');
     logEvent('info', `${label}: анализ начат${force ? ' (вручную)' : ''}`);
     const headcanonKeys = autoHeadcanonKeys(sourceState, message.mes);
@@ -3095,14 +3323,14 @@ ${card.personality ?? card.data?.personality ?? ''}`;
     const trackWorld = settings.trackWorld !== false;
     const separateChronicle = Boolean((knowledge || trackWorld) && settings.knowledgeSeparateRequest);
     const result = await analyzeWithResume(ctx, sourceState, message, loreContext,
-      { headcanonPairs: headcanonKeys, knowledge: separateChronicle ? null : knowledge, world: !separateChronicle && trackWorld && { library: locationLibrary.get(), wardrobe: wardrobeStore.get(), skipItemIds: shadeItems(sourceState) } });
+      { headcanonPairs: headcanonKeys, knowledge: separateChronicle ? null : knowledge, world: !separateChronicle && trackWorld && { library: locationLibrary.get(), wardrobe: wardrobeFor(sourceState), skipItemIds: shadeItems(sourceState), weather: currentWeather(sourceState) } });
     if (!knowledge) result.knowledge = null;
     if (!trackWorld) result.world = null;
     const chroniclerExpected = Boolean(knowledge || trackWorld);
     if (separateChronicle) {
       try {
         const chronicle = await analyzeKnowledge(routedContext(ctx, settings, 'analysis'), sourceState, message, settings,
-          knowledge?.candidates ?? [], { knowledge: Boolean(knowledge), loreList: knowledge?.loreList ?? [], world: trackWorld && { library: locationLibrary.get(), wardrobe: wardrobeStore.get(), skipItemIds: shadeItems(sourceState) } });
+          knowledge?.candidates ?? [], { knowledge: Boolean(knowledge), loreList: knowledge?.loreList ?? [], world: trackWorld && { library: locationLibrary.get(), wardrobe: wardrobeFor(sourceState), skipItemIds: shadeItems(sourceState), weather: currentWeather(sourceState) } });
         result.knowledge = chronicle?.knowledge ?? null;
         result.world = chronicle?.world ?? null;
       } catch (error) {
@@ -3160,7 +3388,7 @@ ${card.personality ?? card.data?.personality ?? ''}`;
     if (!allowNewPair) return skip('анализ отменён');
     if (isStale()) return skip('чат или текст сообщения изменились');
     const applied = applyAnalysisResult(next, result, { transactionId, messageId: String(messageIndex), messageIndex }, acceptedNewCharacters,
-      { linkedScales: settings.linkedScales !== false, tempo: state.ui?.tempo ?? 'normal', allowNewPair, headcanonKeys, trackKnowledge: Boolean(knowledge), trackWorld, loreTitles: knowledge?.loreList?.length ? new Set(knowledge.loreList) : null, library: locationLibrary.get(), wardrobe: wardrobeStore.get() });
+      { linkedScales: settings.linkedScales !== false, tempo: state.ui?.tempo ?? 'normal', allowNewPair, headcanonKeys, trackKnowledge: Boolean(knowledge), trackWorld, loreTitles: knowledge?.loreList?.length ? new Set(knowledge.loreList) : null, library: locationLibrary.get(), wardrobe: wardrobeFor(next) });
     next = applied.state;
     const operations = applied.operations;
     const leaks = applied.leaks ?? [];
@@ -3370,14 +3598,18 @@ ${card.personality ?? card.data?.personality ?? ''}`;
     resetDice();
     autoBindPersona(state).catch(error => console.error('[Kulisy] Persona auto-bind failed.', error));
     // Library places edited while this chat was closed: bring its cards up to date.
+    // Cards that left the library meanwhile are let go of their characters, in the same save.
     try {
       const libraryOperations = syncChat(state, locationLibrary);
-      if (libraryOperations.length) commit(applyOperations(state, libraryOperations), true).catch(error => logEvent('warn', 'Локации чата не обновились по библиотеке', error));
+      const synced = syncChatCards(libraryOperations.length ? applyOperations(state, libraryOperations) : state, locationLibrary);
+      if (synced !== state) commit(synced, true).catch(error => logEvent('warn', 'Локации и карточки чата не обновились по библиотеке', error));
     } catch (error) {
-      logEvent('warn', 'Локации чата не обновились по библиотеке', error);
+      logEvent('warn', 'Локации и карточки чата не обновились по библиотеке', error);
     }
     sceneHeadcanons = [];
     gateTracker.clear();
+    cardTracker.clear();
+    cardsReport = null;
     gateReport = null;
     gateCatalog = [];
     tavernBooks = null;
@@ -3407,6 +3639,15 @@ ${card.personality ?? card.data?.personality ?? ''}`;
         console.error('[Kulisy] Lorebook secrets could not be filtered.', error);
       }
     }
+    // A character with a library card does not get their lorebook sheet as well: the card says it, once.
+    if (settings.sendCards !== false && settings.cardsReplaceLore !== false) {
+      try {
+        const drops = planSheetDrops({ lists, state, library: locationLibrary.get() });
+        if (drops.size) { applyGate(lists, drops); console.debug(`[Kulisy] Карточки заменили записи лорбука: ${drops.size}`); }
+      } catch (error) {
+        console.error('[Kulisy] Lorebook sheets of carded characters could not be set aside.', error);
+      }
+    }
     // «Суфлёр лорбуков»: sections of a character's sheet by who is on stage. Any error leaves the lists as they were.
     if (settings.loreGate?.enabled !== true) { gateReport = null; return; }
     try {
@@ -3415,10 +3656,9 @@ ${card.personality ?? card.data?.personality ?? ''}`;
       const chat = SillyTavern.getContext().chat ?? [];
       const posts = chat.filter(message => message?.is_user && !message.is_system);
       // Whoever a stage cue is bringing in counts as on stage for this reply.
-      const called = directionState().cues.flatMap(cue => (cue.kind === 'call' || cue.kind === 'enter' ? [cue.entityId] : cue.kind === 'scene' ? (cue.castIds ?? []) : []));
       const { decisions, report } = planGate({
         lists, state, config: settings.loreGate,
-        presentIds: [...presentIds(state), ...called],
+        presentIds: [...presentIds(state), ...calledIds()],
         mode: state.world?.clock?.mode ?? 'calm',
         turn: posts.length,
         tracker: gateTracker,
@@ -3560,6 +3800,21 @@ ${card.personality ?? card.data?.personality ?? ''}`;
     createSecretFlow(recent ? recent : { text: '', messageIndex: index }).catch(reportSecretError);
   });
 
+  /** The drawer's «Песни»: what plays or is sung in this chat, what the posts bring up, and the library to pick from. */
+  function songsView() {
+    const library = normalizeSongs(settings.songLibrary);
+    const byId = new Map(library.songs.map(song => [song.id, song]));
+    const chat = normalizeSongState(state.ui?.songs, { songIds: [...byId.keys()] });
+    const label = id => byId.get(id)?.title ?? '';
+    return {
+      enabled: settings.enabled && library.enabled,
+      playing: chat.playing.map(item => ({ songId: item.songId, title: label(item.songId), artist: byId.get(item.songId)?.artist ?? '', mode: item.mode, singerId: item.singerId })),
+      found: (songsReport?.found ?? []).filter(item => byId.has(item.songId)).map(item => ({ songId: item.songId, title: item.title, why: item.why, muted: item.muted })),
+      muted: chat.muted.map(id => ({ songId: id, title: label(id) })),
+      library: library.songs.map(song => ({ songId: song.id, title: song.title, artist: song.artist })),
+    };
+  }
+
   /** Chips: everyone on stage, plus whoever the last messages mention (likely to come on). */
   function overlayView() {
     const enabled = settings.enabled && settings.trackKnowledge !== false;
@@ -3599,6 +3854,7 @@ ${card.personality ?? card.data?.personality ?? ''}`;
       },
       clock: { time: state.world?.clock?.time ?? '', day: state.world?.clock?.day ?? 0, label: state.world?.clock?.label ?? '' },
       dice: diceView(),
+      songs: songsView(),
       quests: enabled ? questsOf(state).filter(quest => quest.status === 'active').slice(0, 6).map(quest => {
         const step = currentStep(quest);
         const progress = progressOf(quest);
@@ -3614,6 +3870,8 @@ ${card.personality ?? card.data?.personality ?? ''}`;
       leaks: enabled ? openLeaks() : [],
       deaths: enabled ? openDeaths() : [],
       questHints: enabled ? openQuestHints() : [],
+      lastSent,
+      build: KULISY_BUILD,
       reveals: enabled ? openReveals() : [],
       secretHints: enabled ? openSecretHints() : [],
       secrets: enabled ? (state.knowledge?.events ?? []).filter(event => event.secret && !event.disabled).length : 0,
@@ -3624,8 +3882,11 @@ ${card.personality ?? card.data?.personality ?? ''}`;
 
   const LEAK_ACTIONS = { swipe: 'onLeakSwipe', knows: 'onLeakKnows', dismiss: 'onLeakDismiss' };
   const chatOverlay = mountChatOverlay({
+    onStage: payload => Promise.resolve(worldCallbacks.onSetStage(payload)).then(() => diceResend()).catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
+    onDiceRelease: ({ group, option }) => diceRelease(group, option),
     onHeat: payload => Promise.resolve(worldCallbacks.onSetHeat(payload)).catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
     onQuestStep: payload => Promise.resolve(worldCallbacks.onQuestStep(payload)).catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
+    onSong: payload => Promise.resolve(songsCallbacks.onSongChat(payload)).catch(error => globalThis.toastr?.error?.(error.message, 'Кулисы')),
     onQuestPush: payload => questCallbacks.onQuestPush(payload),
     onDiceRoll: ({ only }) => diceRoll(only || ''),
     onDiceToggle: ({ group, option }) => diceToggle(group, option),
@@ -3749,6 +4010,7 @@ ${card.personality ?? card.data?.personality ?? ''}`;
     } catch (error) { console.error('[Kulisy] Stage cues were not updated.', error); }
     await prepareHeadcanons(chat);
     refreshPrompt();
+    recordSent(type);
     // Summarized messages leave SillyTavern's prompt copy; the chronicle block stands in for them.
     const chronicleSettings = chronicleConfig(settings.chronicle);
     if (settings.enabled && chronicleSettings.enabled && chronicleSettings.hideSummarized) {

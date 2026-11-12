@@ -1,4 +1,5 @@
-﻿import {
+﻿import { shieldKeys } from './key-shield.js';
+import {
   button, clamp, createFacade, dispatch, element, ensureContainer, formatTime, getPair,
   visibleMetricDefinitions, normalizeSnapshot, pairId, pairLabel, pairTarget,
 } from './helpers.js';
@@ -33,7 +34,7 @@ export function createRelationshipWidget(options = {}) {
   const facade = createFacade(options);
   const host = element('div', { className: 'kulisy-widget-host' });
   const shadow = host.attachShadow({ mode: 'open' });
-  const cleanups = [];
+  const cleanups = [shieldKeys(shadow)];
   let snapshot = normalizeSnapshot(options.initialState || facade.read());
   let selectedPairId = options.activePairId || snapshot.activePairId || pairId(snapshot.activePair);
   let expanded = options.expanded ?? Boolean(snapshot.widget?.expanded);

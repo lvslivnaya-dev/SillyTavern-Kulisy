@@ -26,6 +26,9 @@ export function createWardrobePages(ctx) {
   let gender = 'female';
   let section = ''; // '' = everything
   let query = '';
+  // How the cards are ordered: by section (as always), what is worn first, by character (whose it is), newest first.
+  let sortMode = 'section';
+  let sortPerson = ''; // in the «by character» order: one person's things only ('' = everyone, grouped)
   let composing = false;
   const picked = new Set();
   let lookId = '';
@@ -171,9 +174,53 @@ export function createWardrobePages(ctx) {
     ]);
   }
 
+  /**
+   * Whose a card is: cardId → [{ key, name }] — the characters whose closet it is in (the library card's «Шкаф», the pieces of its sets)
+   * and those who have it on in this chat. A person is 'e:<chat character>' when the library card is switched on in this chat, else 'c:<card>'.
+   */
+  function ownersOf() {
+    const map = new Map();
+    const add = (cardId, key, name) => {
+      const list = map.get(cardId) ?? [];
+      if (!list.some(person => person.key === key)) list.push({ key, name });
+      map.set(cardId, list);
+    };
+    const entityOfCard = new Map(Object.entries(snapshot().cardByEntity ?? {}).map(([entityId, linked]) => [linked.id, entityId]));
+    for (const card of snapshot().locationLibrary?.characters ?? []) {
+      if (!card.closet) continue;
+      const entityId = entityOfCard.get(card.id);
+      const key = entityId ? `e:${entityId}` : `c:${card.id}`;
+      const name = entityId ? nameOf(entityId) : card.name;
+      for (const id of card.closet.cardIds) add(id, key, name);
+      for (const lookId of card.closet.lookIds) for (const id of wardrobe().looks.find(look => look.id === lookId)?.cardIds ?? []) add(id, key, name);
+    }
+    for (const [entityId, entry] of Object.entries(worn())) for (const id of entry?.cardIds ?? []) add(id, `e:${entityId}`, nameOf(entityId));
+    return map;
+  }
+
+  const SORTS = [['section', 'По разделам'], ['worn', 'Надетое сначала'], ['character', 'По персонажу'], ['new', 'Новое сначала']];
+
+  /** The cards in the chosen order (the default order is the one cardsOf gives: section, then name). */
+  function inOrder(list) {
+    if (sortMode === 'new') {
+      // The wardrobe keeps cards in the order they were added.
+      const at = new Map(wardrobe().cards.map((card, index) => [card.id, index]));
+      return [...list].sort((left, right) => at.get(right.id) - at.get(left.id));
+    }
+    if (sortMode === 'worn') return [...list].sort((left, right) => Number(wearersOf(right.id).length > 0) - Number(wearersOf(left.id).length > 0));
+    if (sortMode === 'character') {
+      const owners = ownersOf();
+      if (sortPerson) return list.filter(card => owners.get(card.id)?.some(person => person.key === sortPerson));
+      // Everyone, grouped: by the first owner's name, things of nobody last.
+      const first = card => owners.get(card.id)?.[0]?.name ?? '';
+      return [...list].sort((left, right) => (first(left) ? 0 : 1) - (first(right) ? 0 : 1) || first(left).localeCompare(first(right), 'ru'));
+    }
+    return list;
+  }
+
   function visibleCards() {
     const all = query.trim() ? searchCards(wardrobe(), query, { shelf }) : cardsOf(wardrobe(), { shelf, gender });
-    return section && !query.trim() ? all.filter(card => card.category === section) : all;
+    return inOrder(section && !query.trim() ? all.filter(card => card.category === section) : all);
   }
 
   function tile(card) {
@@ -184,6 +231,10 @@ export function createWardrobePages(ctx) {
       : element('span', { className: 'ku-pic ku-nopic', 'aria-hidden': 'true' }, [icon('shirt'), element('span', { text: SECTION[card.category] })]);
     node.append(picture);
     if (composing) node.append(element('span', { className: 'ku-check', 'aria-hidden': 'true' }, picked.has(card.id) ? [icon('check')] : []));
+    if (sortMode === 'character') {
+      const owners = ownersOf().get(card.id) ?? [];
+      if (owners.length) node.append(element('span', { className: 'ku-owner', title: owners.map(person => person.name).join(', '), text: `у: ${owners.length > 1 ? `${owners[0].name} +${owners.length - 1}` : owners[0].name}` }));
+    }
     const who = wearersOf(card.id);
     if (who.length) node.append(element('span', { className: 'ku-worn', text: who.length > 1 ? `${nameOf(who[0])} +${who.length - 1}` : nameOf(who[0]) }));
     node.append(element('span', { className: 'ku-cap', text: cardLabel(card) }));
@@ -193,6 +244,25 @@ export function createWardrobePages(ctx) {
       render();
     });
     return node;
+  }
+
+  /** «Сортировка» and, in the order by character, whose things to show. */
+  function sortControls() {
+    const pick = element('select', { 'aria-label': 'Сортировка', title: 'Порядок карточек' }, SORTS.map(([key, text]) => element('option', { value: key, text, selected: key === sortMode })));
+    pick.addEventListener('change', () => { sortMode = pick.value; render(); });
+    const controls = [pick];
+    if (sortMode === 'character') {
+      const people = new Map();
+      for (const list of ownersOf().values()) for (const person of list) people.set(person.key, person.name);
+      if (sortPerson && !people.has(sortPerson)) sortPerson = '';
+      const who = element('select', { 'aria-label': 'Чьи вещи', title: 'Вещи из шкафа персонажа и то, что на нём надето' }, [
+        element('option', { value: '', text: 'Все персонажи', selected: !sortPerson }),
+        ...[...people].sort((left, right) => left[1].localeCompare(right[1], 'ru')).map(([key, name]) => element('option', { value: key, text: name, selected: key === sortPerson })),
+      ]);
+      who.addEventListener('change', () => { sortPerson = who.value; render(); });
+      controls.push(who);
+    }
+    return element('span', { className: 'ku-sort' }, controls);
   }
 
   function renderWardrobe() {
@@ -210,6 +280,7 @@ export function createWardrobePages(ctx) {
       seg(Object.entries(WARDROBE_SHELVES), shelf, 'Полка', key => { shelf = key; picked.clear(); lookId = ''; target = ''; render(); }),
       seg(Object.entries(WARDROBE_GENDERS), gender, 'Женское, унисекс или мужское', key => { gender = key; render(); }),
       search,
+      sortControls(),
       button(composing ? 'Готово' : 'Собрать образ', composing ? 'btn primary small' : 'btn small', () => { composing = !composing; if (!composing) { picked.clear(); lookId = ''; lookName = ''; } render(); }),
       filePicker('+ Картинки', { className: 'btn primary small', onFiles: files => addPictures(files) }),
       filePicker('+ Готовый образ', { multiple: false, onFiles: files => addPictures(files, { asOutfit: true }) }),
@@ -574,6 +645,8 @@ export const WARDROBE_STYLE = `
 .ku-nopic{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;color:var(--k-muted);font-size:11px;border-bottom:1px dashed var(--k-line)}
 .ku-nopic.big{width:100%;height:100%;font-size:13px}
 .ku-cap{padding:6px 8px;font-size:11.5px;font-weight:700;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ku-sort{display:inline-flex;gap:6px;flex-wrap:wrap}
+.ku-owner{position:absolute;top:6px;left:6px;max-width:calc(100% - 12px);padding:2px 8px;border-radius:20px;background:var(--k-panel);color:var(--k-text);font-size:10.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ku-worn{position:absolute;top:6px;right:6px;max-width:calc(100% - 12px);padding:2px 8px;border-radius:20px;background:var(--k-panel);color:var(--k-text);font-size:10.5px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;border:1px solid var(--k-accent-line)}
 .ku-check{position:absolute;top:7px;left:7px;width:22px;height:22px;border-radius:7px;border:2px solid var(--k-text);background:var(--k-panel);display:grid;place-items:center;color:var(--k-accent)}
 .ku-tile.on .ku-check{border-color:var(--k-accent)}

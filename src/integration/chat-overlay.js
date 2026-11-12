@@ -12,6 +12,8 @@
  * quotes come from the chat and are never parsed as HTML.
  */
 const CHIPS_ID = 'ku-scene-chips';
+const STRIP_ID = 'ku-scene-strip';
+
 const LEAK_CLASS = 'ku-leak';
 const SLIP_CLASS = 'ku-slip';
 const DEATH_CLASS = 'ku-death-note-chat';
@@ -73,10 +75,10 @@ function chipButton(text, action, data = {}, title = '', className = 'ku-dir-btn
  *                  secrets: [{ eventId, label, text }] }
  * eventIdeas() → [text]: today's calendar events, offered as ready scene events.
  */
-export function mountChatOverlay({ onHeat, onQuestHint, onQuestStep, onQuestPush, onDiceRoll, onDiceToggle, onDiceLock, onDiceAdd, onDiceSend, onDiceClear, onSetTime, onWeather, onSceneMode, onTogglePresent, onLeak, onSlip, onDeath, onReveal, onSecretHint, onOpenStudio,
+export function mountChatOverlay({ onDiceRelease, onStage, onHeat, onQuestHint, onQuestStep, onSong, onQuestPush, onDiceRoll, onDiceToggle, onDiceLock, onDiceAdd, onDiceSend, onDiceClear, onSetTime, onWeather, onSceneMode, onTogglePresent, onLeak, onSlip, onDeath, onReveal, onSecretHint, onOpenStudio,
   onCue, onRemoveCue, onKickNow, onToggleOpen, onFavorite, describe, eventIdeas }) {
   // The panel's own state: what is selected and typed survives every re-render.
-  const fresh = () => ({ diceAdd: '', diceDraft: '', clock: null, selected: '', pane: '', wait: 0, draft: '', eventDraft: '', sceneDraft: '', noteDraft: '', placeDraft: '', placeId: '', skip: 'none', sceneCast: [] });
+  const fresh = () => ({ stageNote: null, diceAdd: '', diceDraft: '', clock: null, selected: '', pane: '', wait: 0, draft: '', eventDraft: '', sceneDraft: '', noteDraft: '', placeDraft: '', placeId: '', skip: 'none', sceneCast: [], songFind: '' });
   const ui = fresh();
   let lastView = null;
   let lastMenu = null;
@@ -135,9 +137,23 @@ export function mountChatOverlay({ onHeat, onQuestHint, onQuestStep, onQuestPush
         Promise.resolve(onHeat?.(payload)).then(() => rerender());
         return true;
       }
+      case 'dir-dice-release': Promise.resolve(onDiceRelease?.({ group: data.group, option: data.option })).then(() => rerender()); return true;
+      case 'dir-stage-note': {
+        const text = (ui.stageNote ?? lastView?.dice?.stage?.note ?? '').trim();
+        Promise.resolve(onStage?.({ note: text })).then(() => { ui.stageNote = null; rerender(); });
+        return true;
+      }
+      case 'dir-stage': Promise.resolve(onStage?.({ stage: data.stage })).then(() => rerender()); return true;
+      case 'dir-stage-step': Promise.resolve(onStage?.({ delta: Number(data.delta) })).then(() => rerender()); return true;
+      case 'dir-stage-lock': Promise.resolve(onStage?.({ lock: !lastView?.dice?.stage?.lock })).then(() => rerender()); return true;
+      case 'dir-stage-clear': Promise.resolve(onStage?.({ clear: true })).then(() => rerender()); return true;
       case 'dir-heat-lock': Promise.resolve(onHeat?.({ lock: !lastView?.heat?.lock })).then(() => rerender()); return true;
       case 'dir-heat-clear': Promise.resolve(onHeat?.({ clear: true })).then(() => rerender()); return true;
       case 'dir-quest-step': Promise.resolve(onQuestStep?.({ questId: data.questId, stepId: data.stepId, done: true })).then(() => rerender()); return true;
+      case 'dir-song-pin': Promise.resolve(onSong?.({ op: 'pin', songId: data.songId, mode: data.mode || 'sound', singerId: data.singerId || '' })).then(() => rerender()); return true;
+      case 'dir-song-unpin': Promise.resolve(onSong?.({ op: 'unpin', songId: data.songId })).then(() => rerender()); return true;
+      case 'dir-song-mute': Promise.resolve(onSong?.({ op: 'mute', songId: data.songId })).then(() => rerender()); return true;
+      case 'dir-song-unmute': Promise.resolve(onSong?.({ op: 'unmute', songId: data.songId })).then(() => rerender()); return true;
       case 'dir-quest-push': Promise.resolve(onQuestPush?.({ questId: data.questId })).then(() => rerender()); return true;
       case 'dir-dice-send': Promise.resolve(onDiceSend?.()).then(() => rerender()); return true;
       case 'dir-dice-clear': Promise.resolve(onDiceClear?.()).then(() => rerender()); return true;
@@ -157,12 +173,17 @@ export function mountChatOverlay({ onHeat, onQuestHint, onQuestStep, onQuestPush
         if (ui.selected === data.entityId) resetMenu(); else Object.assign(ui, { selected: data.entityId, pane: '', draft: '' });
         rerender();
         return true;
-      case 'dir-pane':
-        ui.pane = ui.pane === data.pane ? '' : data.pane;
-        if (['event', 'others', 'scene', 'note', 'who', 'weather', 'mode', 'time', 'dice', 'quests', 'heat'].includes(data.pane)) ui.selected = '';
+      case 'dir-pane': {
+        const open = Boolean(lastView?.director?.open);
+        // The tab that is already on: a second press folds the panel back into the rail.
+        if (open && !ui.selected && (ui.pane || 'who') === data.pane) { onToggleOpen?.(false); return true; }
+        ui.pane = data.pane;
+        if (['event', 'others', 'scene', 'note', 'who', 'weather', 'mode', 'time', 'dice', 'quests', 'songs', 'heat'].includes(data.pane)) ui.selected = '';
         if (data.pane === 'time') ui.clock = null;
+        if (!open) onToggleOpen?.(true);
         rerender();
         return true;
+      }
       case 'dir-wait': ui.wait = Number(data.wait) || 0; rerender(); return true;
       case 'dir-cue': {
         const cue = { kind: data.kind, entityId: ui.selected };
@@ -244,7 +265,9 @@ export function mountChatOverlay({ onHeat, onQuestHint, onQuestStep, onQuestPush
     if (field === 'scene') ui.sceneDraft = event.target.value;
     if (field === 'note') ui.noteDraft = event.target.value;
     if (field === 'place') ui.placeDraft = event.target.value;
+    if (field === 'song-find') { ui.songFind = event.target.value; rerender(); }
     if (field === 'dice-add') ui.diceDraft = event.target.value;
+    if (field === 'stage-note') ui.stageNote = event.target.value;
     if (field === 'clock-time') clockDraft().time = event.target.value;
     if (field === 'clock-day') clockDraft().day = event.target.value;
     if (field === 'clock-label') clockDraft().label = event.target.value;
@@ -256,7 +279,7 @@ export function mountChatOverlay({ onHeat, onQuestHint, onQuestStep, onQuestPush
     }
   };
   // Enter sends from one-line fields; the scene's text is a textarea, Enter there is a new line.
-  const ENTER_ACTIONS = { custom: 'dir-custom', event: 'dir-event-custom', note: 'dir-note', 'dice-add': 'dir-dice-add-save', 'clock-time': 'dir-clock-save', 'clock-day': 'dir-clock-save', 'clock-label': 'dir-clock-save' };
+  const ENTER_ACTIONS = { custom: 'dir-custom', event: 'dir-event-custom', note: 'dir-note', 'dice-add': 'dir-dice-add-save', 'stage-note': 'dir-stage-note', 'clock-time': 'dir-clock-save', 'clock-day': 'dir-clock-save', 'clock-label': 'dir-clock-save' };
   const onKey = event => {
     const action = ENTER_ACTIONS[event.target?.dataset?.kuField];
     if (action && event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
@@ -497,25 +520,170 @@ export function mountChatOverlay({ onHeat, onQuestHint, onQuestStep, onQuestPush
     return card;
   }
 
+  /** The dice window's content: the ladder of the scene, the roll, the groups with their chips. */
+  function diceCard(view) {
+    const dice = view.dice ?? { groups: [], picks: [], locked: [], sent: false };
+    const card = node('div', 'ku-dir-card ku-dir-dice');
+    const ladderCol = node('div', 'ku-dice-ladder');
+    const rollCol = node('div', 'ku-dice-rollcol');
+    const foot = node('div', 'ku-dice-foot');
+      // The ladder: where the scene stands. The narrator writes only that stage (core/intimacy-stage.js).
+    if (dice.stage) {
+      const stage = dice.stage;
+      const ladder = node('div', 'ku-dir-row ku-stage-row');
+      ladder.append(node('span', 'ku-dir-caption ku-dice-label', 'Стадия'));
+      const chips = node('span', 'ku-dice-chips');
+      for (const item of stage.stages) {
+        const on = item.id === stage.id;
+        const chip = chipButton(`${item.icon} ${item.label}`, 'dir-stage', { stage: item.id }, item.hint, `ku-dir-btn ku-stage-chip${on ? ' on' : ''}`);
+        chip.setAttribute('aria-pressed', String(on));
+        chips.append(chip);
+      }
+      ladder.append(chips);
+      ladderCol.append(ladder);
+      const moves = node('div', 'ku-dir-row');
+      moves.append(
+        chipButton('◂ Назад', 'dir-stage-step', { delta: -1 }, 'Стадия назад', 'ku-dir-btn'),
+        chipButton('Дальше ▸', 'dir-stage-step', { delta: 1 }, 'Следующая стадия: рассказчик подводит к ней', 'ku-dir-btn ku-dir-kick'),
+      );
+      if (stage.id) {
+        const hold = chipButton(stage.lock ? '🔒 Держу' : '🔓 Держать', 'dir-stage-lock', {}, stage.lock ? 'Летописец стадию не предлагает: нажми, чтобы отдать ему' : 'Не давать летописцу предлагать стадию', `ku-dir-btn${stage.lock ? ' on' : ''}`);
+        hold.setAttribute('aria-pressed', String(Boolean(stage.lock)));
+        moves.append(hold, chipButton('Сцена закончена', 'dir-stage-clear', {}, 'Снять лесенку: рассказчик пишет сцену как раньше'));
+      }
+      ladderCol.append(moves);
+      rollCol.append(node('span', 'ku-dir-caption', stage.id ? `Рассказчик получает: ${stage.ru || stage.hint} Один шаг за ответ. Летописец сам предложит следующую стадию плашкой под ответом, а ты можешь нажать «Дальше».` : 'Лесенка не запущена: рассказчик пишет сцену как раньше. Выбери стадию или нажми «Дальше ▸».'));
+    if (stage.id) {
+      // The user's own line for the scene: it goes to the narrator with the stage until it is changed or emptied.
+      const note = node('div', 'ku-dir-row ku-dir-field');
+      note.append(textField('stage-note', ui.stageNote ?? stage.note ?? '', 'своя заметка к сцене: например, «пусть он замирает, когда она касается шеи»'), chipButton('Записать', 'dir-stage-note', {}, 'Заметка уйдёт рассказчику со стадией (Enter). Пустая снимает её'));
+      rollCol.append(note);
+    }
+    }
+    const top = node('div', 'ku-dir-row');
+    top.append(
+      chipButton(dice.picks.length ? '🎲 Перебросить' : '🎲 Бросить', 'dir-dice-roll', {}, 'Бросить заново всё, кроме закреплённого замком', 'ku-dir-btn ku-dir-kick'),
+      chipButton(dice.sent ? '✓ Отправлено' : '▶ Отправить', 'dir-dice-send', {}, 'Поставить выбранное направлением на следующий ответ', `ku-dir-btn${dice.sent ? ' on' : ''}`),
+      chipButton('Сбросить', 'dir-dice-clear', {}, 'Убрать выбранное и снять направление'),
+    );
+    // «Начало» has its own button unless the dice roll it by the stage.
+    if (dice.rollMode !== 'stage' && dice.groups.some(group => group.id === 'start')) top.prepend(chipButton('✨ Начало', 'dir-dice-roll', { group: 'start' }, 'Бросить только «Начало»: как всё начинается', 'ku-dir-btn'));
+    foot.append(top);
+    // Picks from a later stage wait here: «сейчас» lets one through at once.
+    const held = dice.picks.filter(pick => pick.ahead);
+    if (held.length) {
+      const waiting = node('div', 'ku-dir-row ku-dice-held');
+      waiting.append(node('span', 'ku-dir-caption ku-dice-label', '⏳ В запасе'));
+      const chips = node('span', 'ku-dice-chips');
+      for (const pick of held) chips.append(chipButton(`${pick.text} · сейчас`, 'dir-dice-release', { group: pick.group, option: pick.id }, 'Это дальше текущей стадии, рассказчик только подводит к нему. Нажми, чтобы он писал это уже сейчас', 'ku-dir-btn'));
+      waiting.append(chips);
+      rollCol.append(waiting);
+    }
+    const burning = new Set(dice.picks.map(pick => `${pick.group}:${pick.id}`));
+    const aheadKeys = new Set(dice.picks.filter(pick => pick.ahead).map(pick => `${pick.group}:${pick.id}`));
+    for (const group of dice.groups) {
+      const row = node('div', 'ku-dir-row ku-dir-dice-row');
+      const locked = dice.locked.includes(group.id);
+      row.append(node('span', 'ku-dir-caption ku-dice-label', `${group.icon} ${group.label}`));
+      const chips = node('span', 'ku-dice-chips');
+      for (const option of group.options) {
+        const on = burning.has(`${group.id}:${option.id}`);
+        const chip = chipButton(option.text, 'dir-dice-pick', { group: group.id, option: option.id }, aheadKeys.has(`${group.id}:${option.id}`) ? 'Впереди текущей стадии: в запасе, пока сцена не дойдёт' : group.multi ? 'Можно выбрать несколько' : 'Выбрать (ещё раз: снять)', `ku-dir-btn ku-dice-chip${on ? ' on' : ''}${on && aheadKeys.has(`${group.id}:${option.id}`) ? ' ahead' : ''}`);
+        chip.setAttribute('aria-pressed', String(on));
+        chips.append(chip);
+      }
+      chips.append(chipButton('+', 'dir-dice-add-open', { group: group.id }, 'Добавить свой вариант', `ku-dir-btn ku-dir-add${ui.diceAdd === group.id ? ' on' : ''}`));
+      row.append(chips,
+        chipButton(locked ? '🔒' : '🔓', 'dir-dice-lock', { group: group.id }, locked ? 'Закреплено: бросок это не меняет' : 'Закрепить: бросок это не меняет', `ku-dir-btn${locked ? ' on' : ''}`),
+        chipButton('↻', 'dir-dice-roll', { group: group.id }, 'Бросить заново только эту группу'));
+      rollCol.append(row);
+      if (ui.diceAdd === group.id) {
+        const add = node('div', 'ku-dir-row ku-dir-field');
+        add.append(textField('dice-add', ui.diceDraft, 'свой вариант: например, «под дождём»'), chipButton('Добавить', 'dir-dice-add-save', {}, 'Добавить в группу и выбрать (Enter)'));
+        rollCol.append(add);
+      }
+    }
+    rollCol.append(node('span', 'ku-dir-caption', dice.sent ? 'Выбранное уже ушло: оно действует на следующий ответ и на его регенерации. Что поменяешь, уйдёт заново само.' : 'Выбери нажатием или брось: выбранное горит. «Отправить» ставит его направлением на следующий ответ.'));
+    const cols = node('div', `ku-dice-cols${dice.stage ? ' with-ladder' : ''}`);
+    cols.append(...(dice.stage ? [ladderCol] : []), rollCol);
+    card.append(cols, foot);
+    return card;
+  }
+
+  /**
+   * The strip above the message box: what the scene is and what goes to the model with the next post
+   * (time, place, who is on stage, the queued directions, the stage and the roll of the dice). One click opens the panel.
+   */
+  function renderStrip(view) {
+    let strip = document.getElementById(STRIP_ID);
+    const show = view.chips && (view.cast.length || view.director?.others?.length);
+    if (!show) { strip?.remove(); return; }
+    const form = document.getElementById('send_form');
+    if (!form?.parentElement) return;
+    if (!strip) {
+      strip = chipButton('', 'dir-toggle', {}, 'Открыть панель сцены', 'ku-scene-strip');
+      strip.id = STRIP_ID;
+      form.parentElement.insertBefore(strip, form);
+    }
+    const director = view.director ?? {};
+    const items = [];
+    const add = (text, className = '') => items.push(node('span', `ku-ss-item${className ? ` ${className}` : ''}`, text));
+    if (view.time) add(view.time);
+    if (view.location) add(`📍 ${view.location}`);
+    if (view.weather?.badge) add(view.weather.badge);
+    if (view.sceneMode && view.sceneMode !== 'calm') add(`${MODE_MARK[view.sceneMode] ?? ''} ${MODE_LABEL[view.sceneMode] ?? view.sceneMode}`);
+    if (view.secrets) add(`🔒 ${view.secrets}${view.waitingReveals ? ` · ждут ${view.waitingReveals}` : ''}`);
+    const here = view.cast.filter(person => person.present);
+    if (here.length) add(here.map(person => person.name).join(', '), 'ku-ss-cast');
+    // What goes out with the next post.
+    const out = [];
+    const stage = view.dice?.stage;
+    if (stage?.id) out.push(`${stage.label}: ${stage.ru || stage.hint}${stage.note ? ` · заметка: ${stage.note}` : ''}`);
+    for (const cue of director.cues ?? []) out.push(`${cue.wait ? `⏳${cue.wait} ` : ''}${cue.badge} ${cue.label}${cue.used ? ' ✓' : ''}`);
+    const picks = view.dice?.picks ?? [];
+    // Sent, it already stands among the queued directions above; only a roll that has not gone out is listed here.
+    if (picks.length && !view.dice?.sent) {
+      const text = picks.map(pick => pick.text).join(' · ');
+      out.push(`🎲 ${text.length > 90 ? `${text.slice(0, 89)}…` : text}${view.dice.sent ? '' : ' (не отправлен)'}`);
+    }
+    const sendLine = node('span', 'ku-ss-out');
+    sendLine.append(node('b', null, 'Уйдёт модели: '));
+    if (out.length) for (const text of out) sendLine.append(node('span', 'ku-ss-tag', text));
+    else sendLine.append(node('span', 'ku-ss-none', 'ничего заготовленного'));
+    const parts = [...items, sendLine];
+    // What really went with the last request (read back from the prompt when it was built).
+    if (view.lastSent) {
+      const last = view.lastSent;
+      const sent = [];
+      if (last.stage) sent.push(`стадия «${last.stage.label}»${last.stage.note ? `, заметка «${last.stage.note}»` : ''}`);
+      sent.push(...last.cues);
+      const line = node('span', 'ku-ss-last');
+      line.append(node('b', null, 'В последний запрос ушло: '), node('span', sent.length ? 'ku-ss-tag' : 'ku-ss-none', sent.length ? sent.join(' · ') : 'ничего от Кулис, кроме обычной сцены'));
+      parts.push(line);
+    }
+    if (view.build) parts.push(node('span', 'ku-ss-ver', `Кулисы ${view.build}`));
+    strip.replaceChildren(...parts);
+  }
+
   /** The drawer: a slim bar when closed; opened, it stays until its arrow is clicked. */
   function renderChips(view) {
     let bar = document.getElementById(CHIPS_ID);
     const show = view.chips && (view.cast.length || view.director?.others?.length);
     if (!show) { bar?.remove(); return; }
-    const form = document.getElementById('send_form');
-    if (!form?.parentElement) return;
     if (!bar) {
-      bar = node('div', 'ku-director');
+      bar = node('div', 'ku-director ku-side');
       bar.id = CHIPS_ID;
       bar.setAttribute('role', 'region');
       bar.setAttribute('aria-label', 'Сцена и режиссура');
+      const panel = node('div', 'ku-panel');
       const headElement = node('div', 'ku-dir-head');
       const body = node('div', 'ku-dir-body');
       body.append(node('div', 'ku-dir-inner'));
-      bar.append(headElement, body);
+      panel.append(headElement, body);
+      bar.append(node('div', 'ku-rail'), panel);
       bar.addEventListener('input', onInput);
       bar.addEventListener('keydown', onKey);
-      form.parentElement.insertBefore(bar, form);
+      document.body.append(bar);
     }
     const director = { cues: [], others: [], favorites: [], silenceAfter: 0, ...(view.director ?? {}) };
     const open = Boolean(director.open);
@@ -524,8 +692,6 @@ export function mountChatOverlay({ onHeat, onQuestHint, onQuestStep, onQuestPush
     const caret = focused ? document.activeElement.selectionStart : null;
 
     const headElement = bar.querySelector('.ku-dir-head');
-    const arrow = chipButton(open ? '▴' : '▾', 'dir-toggle', {}, open ? 'Свернуть' : 'Развернуть', 'ku-dir-arrow');
-    arrow.setAttribute('aria-expanded', String(open));
     const places = [
       ...(view.time ? [pill(view.time, 'Время сцены — открыть пульт')] : []),
       ...(view.location ? [pill(`📍 ${view.location}`, 'Место сцены — открыть пульт')] : []),
@@ -534,29 +700,7 @@ export function mountChatOverlay({ onHeat, onQuestHint, onQuestStep, onQuestPush
       ...(view.secrets ? [pill(`🔒 ${view.secrets}${view.waitingReveals ? ` · ждут ${view.waitingReveals}` : ''}`, 'Секреты — кто что знает', 'secrets')] : []),
     ];
     const cast = [...view.cast].sort((left, right) => Number(right.present) - Number(left.present));
-    if (open) {
-      headElement.removeAttribute('data-ku-action');
-      headElement.title = '';
-      headElement.replaceChildren(arrow, node('strong', 'ku-dir-title', 'Сцена'));
-    } else {
-      // Closed: one click anywhere on the bar opens it.
-      headElement.dataset.kuAction = 'dir-toggle';
-      headElement.title = 'Развернуть';
-      const summary = node('span', 'ku-dir-summary');
-      for (const person of cast.filter(item => item.present)) {
-        const name = node('span', 'ku-dir-name', person.name);
-        const marks = (director.cues ?? []).filter(cue => cue.entityId === person.id).map(cue => cue.badge).join('');
-        const sleepy = !person.persona && director.silenceAfter > 0 && person.silent >= director.silenceAfter;
-        if (marks || sleepy) name.append(node('span', 'ku-chip-badge', `${marks}${sleepy ? '💤' : ''}`));
-        summary.append(name);
-      }
-      const pending = (director.cues ?? []).filter(cue => !cue.entityId).length;
-      if (pending) summary.append(node('span', 'ku-chip-badge', `⚡${pending}`));
-      headElement.replaceChildren(arrow, ...places.map(element => { element.removeAttribute('data-ku-action'); return element; }), summary);
-    }
-
     const inner = bar.querySelector('.ku-dir-inner');
-    if (!open) { inner.replaceChildren(); return; }
     const stage = node('div', 'ku-dir-row ku-dir-cast');
     stage.append(node('span', 'ku-dir-caption', 'На сцене:'));
     const here = cast.filter(item => item.present);
@@ -596,9 +740,10 @@ export function mountChatOverlay({ onHeat, onQuestHint, onQuestStep, onQuestPush
       stack,
       tile(kindInfo ? kindInfo.icon : '🌤', 'Погода', kindInfo ? `${view.weather.temp != null ? `${view.weather.temp}° ` : ''}${kindInfo.label.toLowerCase()}` : 'не задана', 'dir-pane', { pane: 'weather' }, { on: pane === 'weather', title: 'Погода: выбрать, держать, заготовки' }),
       tile(MODE_MARK[mode], 'Тип', MODE_LABEL[mode], 'dir-pane', { pane: 'mode' }, { on: pane === 'mode', title: 'Тип сцены: от него зависит, какие разделы анкет уходят модели' }),
-      ...(mode === 'intim' ? [tile('🎲', 'Кубик', view.dice?.picks?.length ? (view.dice.sent ? 'отправлен' : 'выбрано') : 'бросить', 'dir-pane', { pane: 'dice' }, { on: pane === 'dice', title: 'Кубик близости: чем будет эта сцена' })] : []),
+      ...(mode === 'intim' || view.dice?.stage?.id ? [tile('🎲', 'Кубик', view.dice?.picks?.length ? (view.dice.sent ? 'отправлен' : 'выбрано') : (view.dice?.stage?.label || 'бросить'), 'dir-pane', { pane: 'dice' }, { on: pane === 'dice', title: 'Кубик близости: лесенка стадий, бросок, своя заметка' })] : []),
       tile('🔥', 'Накал', view.heat?.value ? `${view.heat.value} · ${view.heat.label}` : 'спокойно', 'dir-pane', { pane: 'heat' }, { on: pane === 'heat', title: 'Накал сцены: насколько она заряжена. Падает логично, поправить можно рукой' }),
       tile('🧭', 'Квесты', view.quests?.length ? `${view.quests.length} идут` : 'нет', 'dir-pane', { pane: 'quests' }, { on: pane === 'quests', title: 'Квесты: отметить шаг, ввести его в сюжет' }),
+      tile('🎵', 'Песни', view.songs?.playing?.length ? `▶ ${view.songs.playing.length}` : view.songs?.found?.some(item => !item.muted) ? 'слышно' : 'тихо', 'dir-pane', { pane: 'songs' }, { on: pane === 'songs', title: 'Песни: что звучит, кто поёт, какая узнана в постах' }),
       tile('🎬', 'Сцена', 'новая', 'dir-pane', { pane: 'scene' }, { on: pane === 'scene', title: 'Начать новую сцену: с чего, когда, где и с кем' }),
       tile('⚡', 'Событие', 'случится', 'dir-pane', { pane: 'event' }, { on: pane === 'event', title: 'Пусть в сцене что-то случится' }),
       tile('📝', 'Рассказчику', 'указание', 'dir-pane', { pane: 'note' }, { on: pane === 'note', title: 'Указание на следующий ответ, без персонажа' }),
@@ -661,41 +806,67 @@ export function mountChatOverlay({ onHeat, onQuestHint, onQuestStep, onQuestPush
       }
       return card;
     };
-    const diceCard = () => {
-      const dice = view.dice ?? { groups: [], picks: [], locked: [], sent: false };
-      const card = node('div', 'ku-dir-card ku-dir-dice');
-      card.append(node('div', 'ku-dir-card-head', '🎲 Кубик близости'));
-      const top = node('div', 'ku-dir-row');
-      top.append(
-        chipButton(dice.picks.length ? '🎲 Перебросить' : '🎲 Бросить', 'dir-dice-roll', {}, 'Бросить заново всё, кроме закреплённого замком', 'ku-dir-btn ku-dir-kick'),
-        chipButton(dice.sent ? '✓ Отправлено' : '▶ Отправить', 'dir-dice-send', {}, 'Поставить выбранное направлением на следующий ответ', `ku-dir-btn${dice.sent ? ' on' : ''}`),
-        chipButton('Сбросить', 'dir-dice-clear', {}, 'Убрать выбранное и снять направление'),
-      );
-      card.append(top);
-      const burning = new Set(dice.picks.map(pick => `${pick.group}:${pick.id}`));
-      for (const group of dice.groups) {
-        const row = node('div', 'ku-dir-row ku-dir-dice-row');
-        const locked = dice.locked.includes(group.id);
-        row.append(node('span', 'ku-dir-caption ku-dice-label', `${group.icon} ${group.label}`));
-        const chips = node('span', 'ku-dice-chips');
-        for (const option of group.options) {
-          const on = burning.has(`${group.id}:${option.id}`);
-          const chip = chipButton(option.text, 'dir-dice-pick', { group: group.id, option: option.id }, group.multi ? 'Можно выбрать несколько' : 'Выбрать (ещё раз: снять)', `ku-dir-btn ku-dice-chip${on ? ' on' : ''}`);
-          chip.setAttribute('aria-pressed', String(on));
-          chips.append(chip);
+    const songsCard = () => {
+      const songs = view.songs ?? { enabled: false, playing: [], found: [], muted: [], library: [] };
+      const card = node('div', 'ku-dir-card ku-dir-songs');
+      card.append(node('div', 'ku-dir-card-head', '🎵 Песни'));
+      if (!songs.enabled) card.append(node('span', 'ku-dir-caption', 'Песни выключены: включить можно на странице «Мир → Песни».'));
+      const people = (director.people ?? []).slice(0, 10);
+      const pressed = (button, on) => { button.setAttribute('aria-pressed', String(on)); return button; };
+      for (const item of songs.playing) {
+        const row = node('div', 'ku-dir-quest ku-dir-song');
+        const title = node('div', 'ku-dir-quest-title');
+        title.append(node('b', null, item.title), node('span', 'ku-dir-caption', item.artist));
+        const how = node('div', 'ku-dir-row');
+        how.append(pressed(chipButton('🔊 Звучит', 'dir-song-pin', { songId: item.songId, mode: 'sound' }, 'Песня играет в сцене: из колонки, на улице, по радио', `ku-dir-btn${item.mode === 'sound' ? ' on' : ''}`), item.mode === 'sound'));
+        how.append(pressed(chipButton('🎤 Кто-то', 'dir-song-pin', { songId: item.songId, mode: 'sung', singerId: '' }, 'Её поёт кто-то из героев, модель решит кто', `ku-dir-btn${item.mode === 'sung' && !item.singerId ? ' on' : ''}`), item.mode === 'sung' && !item.singerId));
+        for (const person of people) {
+          const on = item.mode === 'sung' && item.singerId === person.id;
+          how.append(pressed(chipButton(`🎤 ${person.name}`, 'dir-song-pin', { songId: item.songId, mode: 'sung', singerId: person.id }, `${person.name} поёт эту песню`, `ku-dir-btn${on ? ' on' : ''}`), on));
         }
-        chips.append(chipButton('+', 'dir-dice-add-open', { group: group.id }, 'Добавить свой вариант', `ku-dir-btn ku-dir-add${ui.diceAdd === group.id ? ' on' : ''}`));
-        row.append(chips,
-          chipButton(locked ? '🔒' : '🔓', 'dir-dice-lock', { group: group.id }, locked ? 'Закреплено: бросок это не меняет' : 'Закрепить: бросок это не меняет', `ku-dir-btn${locked ? ' on' : ''}`),
-          chipButton('↻', 'dir-dice-roll', { group: group.id }, 'Бросить заново только эту группу'));
+        const foot = node('div', 'ku-dir-row');
+        foot.append(chipButton('× Убрать', 'dir-song-unpin', { songId: item.songId }, 'Песня больше не звучит и не поётся', 'ku-dir-btn'));
+        row.append(title, how, foot);
         card.append(row);
-        if (ui.diceAdd === group.id) {
-          const add = node('div', 'ku-dir-row ku-dir-field');
-          add.append(textField('dice-add', ui.diceDraft, 'свой вариант: например, «под дождём»'), chipButton('Добавить', 'dir-dice-add-save', {}, 'Добавить в группу и выбрать (Enter)'));
-          card.append(add);
+      }
+      if (!songs.playing.length) card.append(node('span', 'ku-dir-caption', 'Сейчас ничего не закреплено. Песня подхватывается сама, когда в постах цитируют её строки или называют её; закрепить нужно, если она звучит или поётся без цитат.'));
+      const WHY = { lyrics: 'по словам', title: 'по названию', key: 'по ключу' };
+      if (songs.found.length) {
+        card.append(node('span', 'ku-dir-caption', 'Узнаны в последних постах:'));
+        for (const item of songs.found) {
+          const row = node('div', 'ku-dir-row');
+          row.append(node('span', `ku-dir-tag${item.muted ? ' used' : ''}`, `🎵 ${item.title} · ${WHY[item.why] ?? ''}${item.muted ? ' · заглушена' : ''}`));
+          if (item.muted) row.append(chipButton('Вернуть', 'dir-song-unmute', { songId: item.songId }, 'Снова узнавать эту песню в этом чате', 'ku-dir-btn'));
+          else row.append(
+            chipButton('🔊 Звучит', 'dir-song-pin', { songId: item.songId, mode: 'sound' }, 'Закрепить: песня играет в сцене', 'ku-dir-btn'),
+            chipButton('Не она', 'dir-song-mute', { songId: item.songId }, 'Это не та песня: не узнавать её в этом чате', 'ku-dir-btn'),
+          );
+          card.append(row);
         }
       }
-      card.append(node('span', 'ku-dir-caption', dice.sent ? 'Уйдёт с твоим следующим постом. Что поменяешь, уйдёт заново само.' : 'Выбери нажатием или брось: выбранное горит. «Отправить» ставит его направлением на следующий ответ.'));
+      const silenced = songs.muted.filter(item => !songs.found.some(found => found.songId === item.songId));
+      if (silenced.length) {
+        card.append(node('span', 'ku-dir-caption', 'Заглушены в этом чате:'));
+        for (const item of silenced) {
+          const row = node('div', 'ku-dir-row');
+          row.append(node('span', 'ku-dir-tag used', `🎵 ${item.title}`), chipButton('Вернуть', 'dir-song-unmute', { songId: item.songId }, 'Снова узнавать эту песню в этом чате', 'ku-dir-btn'));
+          card.append(row);
+        }
+      }
+      const find = textField('song-find', ui.songFind, 'Найти песню в библиотеке…');
+      find.setAttribute('aria-label', 'Найти песню в библиотеке');
+      card.append(find);
+      const query = ui.songFind.trim().toLocaleLowerCase('ru-RU');
+      const pinned = new Set(songs.playing.map(item => item.songId));
+      const hits = query ? songs.library.filter(item => !pinned.has(item.songId) && `${item.title} ${item.artist}`.toLocaleLowerCase('ru-RU').includes(query)).slice(0, 8) : [];
+      if (hits.length) {
+        const row = node('div', 'ku-dir-row');
+        for (const item of hits) row.append(chipButton(`＋ ${item.title}${item.artist ? ` — ${item.artist}` : ''}`, 'dir-song-pin', { songId: item.songId, mode: 'sound' }, 'Закрепить: песня играет в сцене (потом можно назначить, кто поёт)', 'ku-dir-btn'));
+        card.append(row);
+      } else if (query) card.append(node('span', 'ku-dir-caption', 'В библиотеке такой песни нет.'));
+      const tools = node('div', 'ku-dir-row');
+      tools.append(chipButton('Библиотека ▸', 'studio', { tab: 'songs' }, 'Страница песен: описания, слова, ключи', 'ku-dir-btn'));
+      card.append(tools);
       return card;
     };
     const timeCard = () => {
@@ -742,7 +913,16 @@ export function mountChatOverlay({ onHeat, onQuestHint, onQuestStep, onQuestPush
       card.append(row, tools);
       return card;
     };
-    const parts = [grid];
+    // The rail: always there, one button per tab; the first one folds and unfolds the panel.
+    const pending = (director.cues ?? []).length;
+    const toggle = chipButton(open ? '◂' : '▸', 'dir-toggle', {}, open ? 'Свернуть панель в рейку' : 'Развернуть панель сцены', 'ku-rail-toggle');
+    toggle.setAttribute('aria-expanded', String(open));
+    if (pending) toggle.append(node('span', 'ku-rail-badge', pending));
+    bar.querySelector('.ku-rail').replaceChildren(toggle, ...grid.children);
+    const TAB_TITLES = { who: 'Кто на сцене', others: 'Позвать', time: 'Время', weather: 'Погода', mode: 'Тип сцены', dice: 'Кубик близости', heat: 'Накал сцены', quests: 'Квесты', songs: 'Песни', scene: 'Новая сцена', event: 'Событие', note: 'Рассказчику' };
+    headElement.replaceChildren(node('strong', 'ku-dir-title', ui.selected ? 'Персонаж' : (TAB_TITLES[pane] ?? 'Сцена')), ...places);
+    if (!open) { inner.replaceChildren(); return; }
+    const parts = [];
     if (ui.selected) {
       parts.push(stage);
       const menu = characterMenu(director);
@@ -750,9 +930,10 @@ export function mountChatOverlay({ onHeat, onQuestHint, onQuestStep, onQuestPush
     } else if (pane === 'who') parts.push(stage);
     else if (pane === 'others') parts.push(stage, othersMenu(director));
     else if (pane === 'time') parts.push(timeCard());
-    else if (pane === 'dice') parts.push(diceCard());
     else if (pane === 'quests') parts.push(questsCard());
+    else if (pane === 'songs') parts.push(songsCard());
     else if (pane === 'heat') parts.push(heatCard());
+    else if (pane === 'dice') parts.push(diceCard(view));
     else if (pane === 'weather') parts.push(weatherCard());
     else if (pane === 'mode') parts.push(modeCard());
     else if (pane === 'event') parts.push(eventMenu());
@@ -870,7 +1051,7 @@ export function mountChatOverlay({ onHeat, onQuestHint, onQuestStep, onQuestPush
       const note = node('div', `${LEAK_CLASS} ${QUEST_HINT_CLASS}`);
       note.setAttribute('role', 'note');
       const text = node('div', 'ku-leak-text');
-      text.append(node('i', 'fa-solid fa-flag'), node('b', null, ` ${hint.title} `));
+      text.append(node('i', `fa-solid ${hint.icon ?? 'fa-flag'}`), node('b', null, ` ${hint.title} `));
       if (hint.detail) text.append(node('span', 'ku-leak-quote', hint.detail));
       const actions = node('div', 'ku-leak-actions');
       actions.append(
@@ -932,6 +1113,7 @@ export function mountChatOverlay({ onHeat, onQuestHint, onQuestStep, onQuestPush
       lastView = view;
       try {
         renderChips(view);
+        renderStrip(view);
         renderLeaks(view);
         renderDeaths(view);
         renderQuestHints(view);
@@ -946,6 +1128,7 @@ export function mountChatOverlay({ onHeat, onQuestHint, onQuestStep, onQuestPush
       document.removeEventListener('click', onClick, true);
       document.removeEventListener('keydown', onHotkey, true);
       document.getElementById(CHIPS_ID)?.remove();
+      document.getElementById(STRIP_ID)?.remove();
       for (const old of document.querySelectorAll(`.${LEAK_CLASS}`)) old.remove();
       for (const old of document.querySelectorAll(`.${SLIP_CLASS}`)) old.remove();
       for (const old of document.querySelectorAll(`.${DEATH_CLASS}`)) old.remove();

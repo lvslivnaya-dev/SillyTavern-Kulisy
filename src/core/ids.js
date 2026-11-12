@@ -2,10 +2,17 @@ import { namesMaybeAlike, namesSoundAlike, phoneticWords } from './phonetic.js';
 
 const counters = new Map();
 
-/** Normalize a user-facing name for alias matching. */
+const ALIAS_CACHE = new Map();
+
+/** Normalize a user-facing name for alias matching (remembered: name matching asks about the same names thousands of times). */
 export function normalizeAlias(value) {
   if (typeof value !== 'string') throw new TypeError('Alias must be a string');
-  return value.normalize('NFKC').trim().toLocaleLowerCase('en-US').replace(/\s+/g, ' ');
+  const known = ALIAS_CACHE.get(value);
+  if (known !== undefined) return known;
+  const result = value.normalize('NFKC').trim().toLocaleLowerCase('en-US').replace(/\s+/g, ' ');
+  if (ALIAS_CACHE.size > 20000) ALIAS_CACHE.clear();
+  ALIAS_CACHE.set(value, result);
+  return result;
 }
 
 function hash(value) {

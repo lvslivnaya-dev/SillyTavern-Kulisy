@@ -17,8 +17,9 @@
  * It lives in the extension settings (all chats). Pure: the randomness is passed in.
  */
 import { uniqueId } from './ids.js';
+import { groupsForRoll } from './intimacy-stage.js';
 
-export const DICE_LIMITS = Object.freeze({ custom: 30, text: 120, history: 5 });
+export const DICE_LIMITS = Object.freeze({ custom: 30, text: 400, history: 5 });
 /** An option seen in this many last rolls is much less likely to come up again. */
 const REPEAT_WEIGHT = 0.12;
 
@@ -27,6 +28,18 @@ const opt = (id, text, en) => ({ id, text, en });
 /** The ready groups. `chance`: how often an optional group takes part in a roll (1 = always). */
 export const DICE_GROUPS = Object.freeze([
   { id: 'initiative', label: 'Кто ведёт', icon: '👑', en: 'initiative', chance: 1, dynamic: true, options: [] },
+  // How the scene begins. Rolled by its own button (the default) or, in the mode «по стадии», together with the early stages.
+  { id: 'start', label: 'Начало', icon: '✨', en: 'how it begins', chance: 1, options: [
+    opt('look', 'долгий взгляд, который затянулся', 'a look that lasts a beat too long'),
+    opt('touch', 'случайное касание, которое не отдёргивают', 'an accidental touch that nobody pulls away from'),
+    opt('pause', 'пауза посреди разговора, когда слова кончились', 'a pause in the middle of talk when the words run out'),
+    opt('joke', 'шутка, которая вдруг перестала быть шуткой', 'a joke that suddenly stops being one'),
+    opt('care', 'забота, которая стала слишком личной', 'an act of care that turns too personal'),
+    opt('jealous', 'ревность, вырвавшаяся наружу', 'jealousy that breaks out'),
+    opt('hug', 'объятие, которое не спешат разжимать', 'an embrace that nobody hurries to end'),
+    opt('tension', 'напряжение после опасности или ссоры', 'tension left over after danger or a quarrel'),
+    opt('straight', 'один из них говорит прямо, без намёков', 'one of them says it straight, with no hints'),
+  ] },
   { id: 'act', label: 'Тип секса', icon: '🔥', en: 'kind of sex', chance: 1, multi: true, options: [
     opt('vaginal', 'вагинальный', 'vaginal sex'),
     opt('anal', 'анальный', 'anal sex'),
@@ -111,14 +124,15 @@ export function normalizeDice(raw) {
   }
   const history = (Array.isArray(raw?.history) ? raw.history : []).slice(-DICE_LIMITS.history)
     .map(entry => (Array.isArray(entry) ? entry.filter(value => typeof value === 'string').slice(0, 12) : [])).filter(entry => entry.length);
-  return { avoidRepeat: raw?.avoidRepeat !== false, auto: raw?.auto !== false, groups, history };
+  return { avoidRepeat: raw?.avoidRepeat !== false, autoRoll: raw?.autoRoll === true, rollMode: raw?.rollMode === 'stage' ? 'stage' : 'separate', groups, history };
 }
 
 /** patch: { avoidRepeat } | { clearHistory } | { group, off } | { group, option, hidden } | { group, addCustom } | { group, removeCustom }. */
 export function updateDice(settings, patch = {}) {
   const next = JSON.parse(JSON.stringify(normalizeDice(settings)));
   if ('avoidRepeat' in patch) next.avoidRepeat = Boolean(patch.avoidRepeat);
-  if ('auto' in patch) next.auto = Boolean(patch.auto);
+  if ('autoRoll' in patch) next.autoRoll = Boolean(patch.autoRoll);
+  if ('rollMode' in patch) next.rollMode = patch.rollMode === 'stage' ? 'stage' : 'separate';
   if (patch.clearHistory) next.history = [];
   const group = next.groups[patch.group];
   if (patch.group && !group) throw new Error('Не знаю такой группы.');
@@ -159,15 +173,18 @@ export function describeGroups(settings) {
 /** Keep the picks in the order of the groups; inside a group, in the order they were made. */
 const inGroupOrder = picks => [...picks].sort((left, right) => groupIds.indexOf(left.group) - groupIds.indexOf(right.group));
 
-const pickOf = (group, option) => ({ group: group.id, label: group.label, icon: group.icon, groupEn: group.en, id: option.id, text: option.text, en: option.en });
+const pickOf = (group, option) => ({ group: group.id, label: group.label, icon: group.icon, groupEn: group.en, id: option.id, text: option.text, en: option.en, ...(option.custom ? { custom: true } : {}) });
 
 /**
  * Roll. npcs: [{ id, name }] the characters on stage the model plays (never the persona).
  * keep: picks that stay as they are (locked, or the other groups when one is re-rolled).
- * only: a group id: roll just that one. → [{ group, label, icon, groupEn, id, text, en }] in group order.
+ * only: a group id: roll just that one (always, whatever the mode). stage: the running stage of the scene (core/intimacy-stage.js):
+ * with rollMode 'stage' it decides which groups a full roll takes; by default «Начало» is left to its own button.
+ * → [{ group, label, icon, groupEn, id, text, en }] in group order.
  */
-export function rollDice(settings, { npcs = [], keep = [], only = '', random = Math.random } = {}) {
+export function rollDice(settings, { npcs = [], keep = [], only = '', stage = '', random = Math.random } = {}) {
   const clean = normalizeDice(settings);
+  const allowed = only ? null : groupsForRoll(clean.rollMode, stage, groupIds);
   const recent = new Set(clean.avoidRepeat ? clean.history.slice(-3).flat() : []);
   const picks = [];
   for (const group of DICE_GROUPS) {
@@ -175,6 +192,7 @@ export function rollDice(settings, { npcs = [], keep = [], only = '', random = M
     const held = keep.filter(pick => pick.group === group.id);
     if (held.length && group.id !== only) { picks.push(...held); continue; }
     if (only && group.id !== only) continue;
+    if (allowed && !allowed.includes(group.id)) continue;
     const options = optionsOf(clean, group.id, npcs);
     if (!options.length) continue;
     // Optional groups join some of the rolls; asked for by hand, always.
@@ -211,13 +229,30 @@ export function viewGroups(settings, npcs = []) {
   }));
 }
 
-/** What becomes the stage direction: a short Russian line for the badge and the English detail for the narrator. */
-export function diceCue(picks) {
-  const order = [];
-  for (const pick of picks) if (!order.some(item => item.group === pick.group)) order.push({ group: pick.group, groupEn: pick.groupEn });
+/**
+ * What becomes the stage direction: a short Russian line for the badge and the English detail for the narrator.
+ * A pick marked `ahead` belongs to a later stage than the scene is at: it goes under «held back», so the narrator
+ * does not write it yet. `stage`: the running stage id; the detail then also says to write only that stage.
+ */
+export function diceCue(picks, { stage = '' } = {}) {
+  // The user's own wording is not a flavour: it has to show in the reply (inside the stage).
+  const own = picks.filter(pick => pick.custom && !pick.ahead);
+  const now = picks.filter(pick => !pick.ahead && !pick.custom);
+  const held = picks.filter(pick => pick.ahead);
+  const describe = list => {
+    const order = [];
+    for (const pick of list) if (!order.some(item => item.group === pick.group)) order.push({ group: pick.group, groupEn: pick.groupEn });
+    return order.map(item => `${item.groupEn}: ${list.filter(pick => pick.group === item.group).map(pick => pick.en).join(' + ')}`).join('; ');
+  };
+  const parts = [
+    stage ? `the scene is at the stage "${stage}": write only that stage` : '',
+    describe(now),
+    own.length ? `THE USER'S OWN REQUEST, it must visibly happen in this reply (inside the stage, in the character's own manner): ${own.map(pick => `${pick.groupEn}: ${pick.en}`).join('; ')}` : '',
+    held.length ? `HELD BACK until the scene reaches that stage (lead up to it at most, do not write it yet): ${describe(held)}` : '',
+  ].filter(Boolean);
   return {
-    text: picks.map(pick => pick.text).join(' · '),
-    detail: order.map(item => `${item.groupEn}: ${picks.filter(pick => pick.group === item.group).map(pick => pick.en).join(' + ')}`).join('; '),
+    text: [...now.map(pick => pick.text), ...own.map(pick => pick.text), ...(held.length ? [`впереди: ${held.map(pick => pick.text).join(', ')}`] : [])].join(' · '),
+    detail: parts.join('; '),
   };
 }
 

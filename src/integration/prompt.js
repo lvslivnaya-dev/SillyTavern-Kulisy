@@ -1,4 +1,4 @@
-import { CALENDAR_PROMPT_KEY, CHRONICLE_PROMPT_KEY, DIRECTION_PROMPT_KEY, KNOWLEDGE_PROMPT_KEY, NAMES_PROMPT_KEY, PROMPT_KEY, QUESTS_PROMPT_KEY, SCENE_PROMPT_KEY } from './settings.js';
+import { CALENDAR_PROMPT_KEY, CARDS_PROMPT_KEY, CHRONICLE_PROMPT_KEY, DIRECTION_PROMPT_KEY, KNOWLEDGE_PROMPT_KEY, NAMES_PROMPT_KEY, PROMPT_KEY, QUESTS_PROMPT_KEY, SCENE_PROMPT_KEY, SONGS_PROMPT_KEY } from './settings.js';
 
 /** extension_prompt_types.IN_PROMPT: after the story string, before the chat history. */
 const POSITION_IN_PROMPT = 0;
@@ -24,6 +24,26 @@ export function clearRelationshipPrompt(context) {
   updateDirectionPrompt(context, '');
   updateNamesPrompt(context, '');
   updateQuestsPrompt(context, '');
+  updateCardsPrompt(context, '');
+  updateSongsPrompt(context, '');
+}
+
+/** Songs that play, are sung or were quoted in the scene (core/song-library.js planSongs), already wrapped; '' removes them. */
+export function updateSongsPrompt(context, block) {
+  try {
+    context.setExtensionPrompt(SONGS_PROMPT_KEY, block || '', POSITION_IN_CHAT, 1, false, ROLE_SYSTEM);
+  } catch (error) {
+    console.error('[Kulisy] Failed to update the songs prompt.', error);
+  }
+}
+
+/** Sheets of the attached character cards (card-prompt.js), already wrapped; '' removes them. */
+export function updateCardsPrompt(context, block) {
+  try {
+    context.setExtensionPrompt(CARDS_PROMPT_KEY, block || '', POSITION_IN_CHAT, 1, false, ROLE_SYSTEM);
+  } catch (error) {
+    console.error('[Kulisy] Failed to update the character cards prompt.', error);
+  }
 }
 
 /** Open quests of the chat (core/quests.js), already wrapped; '' removes them. */

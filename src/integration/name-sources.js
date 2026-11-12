@@ -42,7 +42,7 @@ export function keyNames(key) {
 }
 
 /** Whether a lorebook entry is about this character: its title is one of their names. */
-function entryIsAbout(entry, entity) {
+export function entryIsAbout(entry, entity) {
   // «[ Manjiro Sano ] - Basic Info», «Ран Хайтани — анкета», «Майки (Бонтен)» → the name part only.
   const raw = String(entry?.comment ?? '').trim();
   const bracket = /^\[\s*([^\]]+?)\s*\]/.exec(raw);

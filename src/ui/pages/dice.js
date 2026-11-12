@@ -24,13 +24,19 @@ export function createDicePages(ctx) {
     const current = dice();
     const avoid = element('input', { type: 'checkbox', className: 'set-switch', checked: current.avoidRepeat, 'aria-label': 'Не повторять недавние броски' });
     avoid.addEventListener('change', () => patch({ avoidRepeat: avoid.checked }));
-    const auto = element('input', { type: 'checkbox', className: 'set-switch', checked: current.auto !== false, 'aria-label': 'Бросать само при переходе в близость' });
-    auto.addEventListener('change', () => patch({ auto: auto.checked }));
+    const auto = element('input', { type: 'checkbox', className: 'set-switch', checked: current.autoRoll === true, 'aria-label': 'Бросать само при переходе в близость' });
+    auto.addEventListener('change', () => patch({ autoRoll: auto.checked }));
+    const mode = element('select', { 'aria-label': 'Как бросается «Начало»' }, [
+      element('option', { value: 'separate', text: 'А. Отдельной кнопкой «✨ Начало» (по умолчанию)', selected: current.rollMode !== 'stage' }),
+      element('option', { value: 'stage', text: 'Б. По стадии: одна кнопка, кубик сам берёт нужные группы', selected: current.rollMode === 'stage' }),
+    ]);
+    mode.addEventListener('change', () => patch({ rollMode: mode.value }, 'Способ броска сохранён'));
     return element('div', { className: 'card' }, [
       element('h3', { text: 'Кубик близости' }),
       element('p', { className: 'muted ku-small', style: { margin: '0 0 8px' }, text: 'Когда тип сцены «Близость», в шторке появляется плитка «Кубик». Бросок выбирает по одному варианту из групп ниже (в «Типе секса» может быть несколько), выбранное горит, его можно менять нажатием, и оно уходит направлением на следующий ответ. «Кто ведёт» выбирается только среди тех, кого играет рассказчик: персона никогда не ведёт и за неё ничего не пишется.' }),
       element('label', { className: 'ku-names-opt' }, [element('span', {}, [element('strong', { text: 'Не повторять недавнее' }), element('small', { className: 'muted', text: 'Варианты из трёх последних отправленных бросков выпадают заметно реже.' })]), avoid]),
       element('label', { className: 'ku-names-opt' }, [element('span', {}, [element('strong', { text: 'Бросать само при переходе в близость' }), element('small', { className: 'muted', text: 'Когда тип сцены становится «Близость», кубик бросается сам и сразу уходит направлением на следующий ответ. Выбор в шторке можно поменять: изменённое уйдёт заново.' })]), auto]),
+      element('label', { className: 'ku-names-opt' }, [element('span', {}, [element('strong', { text: 'Как бросается «Начало»' }), element('small', { className: 'muted', text: 'А: «Начало» бросается своей кнопкой, остальное — обычным броском. Б: кубик смотрит на стадию сцены. До «Раздевания» он не бросает тип секса и условия, они появляются вместе со стадиями «Раздевание» и «Близость».' })]), mode]),
       element('div', { className: 'row', style: { marginTop: '8px' } }, [
         button(`Забыть прошлые броски${current.historyCount ? ` (${current.historyCount})` : ''}`, 'btn small', () => patch({ clearHistory: true }, 'Прошлые броски забыты')),
       ]),

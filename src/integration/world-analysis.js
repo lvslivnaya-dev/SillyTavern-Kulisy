@@ -16,11 +16,11 @@
  * Order matters and is kept by applyAnalysisResult: place → clock → scene (who came
  * in) → the rest, so "three days later Rindo walks in" lets Rindo change clothes.
  */
-import { SCENE_MODES, heatFromReply, WEATHER_KINDS, WEATHER_KIND_IDS, formatTime, parseTime, presentIds, uniqueId } from '../core/index.js';
+import { SCENE_MODES, heatFromReply, stageOf, stageStepProposal, WEATHER_KINDS, WEATHER_KIND_IDS, formatTime, parseTime, presentIds, uniqueId } from '../core/index.js';
 import { mentionedEntities } from './headcanon-retrieval.js';
 import { effectiveLocation, findInLibrary, linkPayloads, linkedCards } from './location-links.js';
 import { findItemInLibrary, itemFromLibrary, linkedItems } from './item-links.js';
-import { cardLabel, composeOutfit, wornCards } from '../core/index.js';
+import { cardLabel, composeOutfit, weatherLine, wornCards } from '../core/index.js';
 
 /** Characters the reply concerns: on stage before it, plus everyone it mentions (same rule as the knowledge chronicler). */
 function chronicleCast(state, text) {
@@ -84,7 +84,7 @@ function candidateItems(state, cast, skip = null) {
  * The SCENE STATE block of the analyzer's user prompt. `library`: places of library
  * cards read from there; `wardrobe`: the cards people wear and the saved looks.
  */
-export function buildWorldBlock(state, text, library = null, wardrobe = null, skipItemIds = null) {
+export function buildWorldBlock(state, text, library = null, wardrobe = null, skipItemIds = null, weather = null) {
   const name = id => state.entities?.[id]?.name ?? id;
   const tag = id => `${name(id)} (${id})`;
   const clock = state.world?.clock ?? { label: '', day: 0, time: '', part: '' };
@@ -92,6 +92,7 @@ export function buildWorldBlock(state, text, library = null, wardrobe = null, sk
   const currentId = state.knowledge?.scene?.locationId ?? '';
   const lines = [
     'SCENE STATE TRACKING',
+    ...(state.world?.clock?.mode === 'intim' || state.world?.intimacy ? [`Intimacy stage before this reply: ${state.world.intimacy ? `${state.world.intimacy.stage}${state.world.intimacy.lock ? ' [LOCKED by the user: do not report a stage]' : ''}` : 'not started'}.`] : []),
     ...(state.world?.heat ? [`Scene heat before this reply: ${state.world.heat.value}/100${state.world.heat.why ? ` (${state.world.heat.why})` : ''}${state.world.heat.lock ? ' [LOCKED by the user: do not report heat]' : ''}.`] : []),
     `Story time before this reply: ${[
       clock.day ? `day ${clock.day}` : 'day unknown',
@@ -101,6 +102,9 @@ export function buildWorldBlock(state, text, library = null, wardrobe = null, sk
       clock.flashback ? 'NOW IN A FLASHBACK' : '',
     ].filter(Boolean).join(', ')}.`,
   ];
+  // The weather outdoors (and so how warmly people must be dressed), as the story stands before this reply.
+  const weatherText = weather && !clock.flashback ? weatherLine(weather) : '';
+  if (weatherText) lines.push(`Outdoor ${weatherText}.`);
   const locations = candidateLocations(state);
   if (locations.length) {
     lines.push('Location cards (ID: name | inside | features | current changes):');
@@ -125,6 +129,14 @@ export function buildWorldBlock(state, text, library = null, wardrobe = null, sk
   if (outfits.length) lines.push('Outfits of the characters of this reply:', ...outfits);
   const looks = (wardrobeCards?.looks ?? []).slice(0, 30);
   if (looks.length) lines.push(`Saved looks (ID: name): ${looks.map(look => `${look.id}: ${look.name}`).join('; ')}`);
+  // What each character owns (library character card → closet): the AI picks a change of clothes from it.
+  const closets = [...cast].filter(id => state.entities?.[id] && wardrobeCards?.closets?.[id]).map(id => {
+    const closet = wardrobeCards.closets[id];
+    const owned = (closet.lookIds ?? []).map(lookId => (wardrobeCards.looks ?? []).find(look => look.id === lookId)).filter(Boolean).map(look => `${look.id}: ${look.name}`);
+    const pieces = wornCards(wardrobeCards, closet.cardIds).slice(0, 40).map(card => `${card.id}: ${cardLabel(card)}`);
+    return owned.length || pieces.length ? `- ${tag(id)}: looks [${owned.join('; ') || '—'}] | pieces [${pieces.join('; ') || '—'}]` : '';
+  }).filter(Boolean);
+  if (closets.length) lines.push('Closets (what each of them owns: when one of them changes clothes, choose from their closet first):', ...closets);
   const items = candidateItems(state, cast, skipItemIds ? new Set(skipItemIds) : null);
   if (items.length) {
     lines.push('Tracked items (ID: name | holder | where | importance):');
@@ -143,13 +155,15 @@ export function buildWorldBlock(state, text, library = null, wardrobe = null, sk
 }
 
 /** Instructions appended to the analyzer's system prompt. */
-export const WORLD_INSTRUCTIONS = ` Also return "world": {"clock":{"time":"HH:MM","advanceDays":0,"label":"","flashback":false,"mode":"calm"},"weather":{"kind":"clear|cloudy|rain|storm|snow|fog|wind|heat","tempC":null,"text":""},"heat":{"level":0,"why":""},"place":{"locationId":"listed ID or null","new":{"name":"short place","parentId":"listed ID or null","traits":["feature"]},"addTraits":[],"addNotes":[],"removeNotes":[]},"outfits":[{"entityId":"a","outfit":"full current outfit","cardIds":["listed wardrobe card IDs still worn"],"lookId":"listed look ID or null"}],"conditions":[{"entityId":"a","text":"short state","days":1}],"conditionsGone":[{"entityId":"a","conditionId":"listed ID"}],"features":[{"entityId":"a","text":"lasting look, Russian","kind":"scar"}],"featuresChanged":[{"entityId":"a","featureId":"listed ID","text":"the full new text"}],"featuresGone":[{"entityId":"a","featureId":"listed ID"}],"items":[{"itemId":"listed ID, omit for a new item","name":"short name","ownerId":"a or null","place":"where exactly","importance":"normal","secret":false}],"itemsGone":["listed ID"],"slips":[{"kind":"outfit","entityId":"a","quote":"words from the reply","note":"short Russian: what contradicts what"}],"quests":{"new":[{"name":"short Russian title","text":"one Russian sentence","steps":["step"]}],"steps":[{"questId":"listed ID","stepId":"listed step ID"}],"ended":[{"questId":"listed ID","status":"done","note":"short Russian"}]}}.
+export const WORLD_INSTRUCTIONS = ` Also return "world": {"clock":{"time":"HH:MM","advanceDays":0,"label":"","flashback":false,"mode":"calm"},"weather":{"kind":"clear|cloudy|rain|storm|snow|fog|wind|heat","tempC":null,"text":""},"heat":{"level":0,"why":""},"intimacy":{"stage":"spark|touch|kiss|undress|act|after","why":""},"place":{"locationId":"listed ID or null","new":{"name":"short place","parentId":"listed ID or null","traits":["feature"]},"addTraits":[],"addNotes":[],"removeNotes":[]},"outfits":[{"entityId":"a","outfit":"full current outfit","cardIds":["listed wardrobe card IDs still worn"],"lookId":"listed look ID or null"}],"conditions":[{"entityId":"a","text":"short state","days":1}],"conditionsGone":[{"entityId":"a","conditionId":"listed ID"}],"features":[{"entityId":"a","text":"lasting look, Russian","kind":"scar"}],"featuresChanged":[{"entityId":"a","featureId":"listed ID","text":"the full new text"}],"featuresGone":[{"entityId":"a","featureId":"listed ID"}],"items":[{"itemId":"listed ID, omit for a new item","name":"short name","ownerId":"a or null","place":"where exactly","importance":"normal","secret":false}],"itemsGone":["listed ID"],"slips":[{"kind":"outfit","entityId":"a","quote":"words from the reply","note":"short Russian: what contradicts what"}],"quests":{"new":[{"name":"short Russian title","text":"one Russian sentence","steps":["step"]}],"steps":[{"questId":"listed ID","stepId":"listed step ID"}],"ended":[{"questId":"listed ID","status":"done","note":"short Russian"}]}}.
 SCENE STATE RULES:
 - clock.time: story time at the END of this reply, 24-hour HH:MM. Estimate from cues (dawn, lunch, "after midnight", how long things take) and keep it consistent with the previous time; omit when nothing suggests a time. advanceDays: whole days this reply skips ("three days later" = 3; crossing midnight into the next day = 1); 0 otherwise. label: weekday or date ONLY if the text states it. flashback: true only while the reply narrates the past, false when it returns to the present. mode: what the scene is at the END of this reply — "fight" when a physical fight or battle is under way or breaking out, "intim" when sexual intimacy is under way or clearly starting (undressing each other, heavy petting, sex), otherwise "calm". Always give it.
 - weather: the weather OUTDOORS at the END of this reply, ONLY when the reply states or clearly shows it (rain on the window, snow, a hot sun, someone shivering from cold, wet hair from rain). kind is one of the listed words; tempC a number only if stated or obvious, otherwise null; text a few Russian words about how it looks («моросит, лужи»). Omit "weather" when the reply says nothing about it, and during a flashback.
 - heat: how charged the WHOLE scene is at the END of this reply, 0..100 (0 calm; 20 a little tension; 40 pressure building; 60 high, on the edge; 80+ at the limit: a fight, a threat, a breaking point, the peak of arousal). Judge it against the listed previous heat and the story: it rises with what the reply shows (an argument, danger, a threat, escalating desire) and falls ONLY for a reason on page (a pause, a retreat, an apology, relief, time passing, the scene moving to something calm), never just by itself; a single beat rarely drops it by more than 20. why: a few Russian words. Omit "heat" when nothing changed, and during a flashback.
+- intimacy: ONLY while the scene is intimate (clock.mode intim). stage is where the intimate scene stands at the END of this reply: spark (looks, a charged pause, a first hint), touch (touching, clothes on), kiss (kissing and embraces), undress (clothes coming off, caresses), act (the act itself), after (the quiet afterwards). Judge only by what the reply SHOWS has happened, never by what is about to. It is a proposal the user confirms, one stage at a time: when the reply stays within the listed stage, repeat that stage or omit "intimacy". Never for a flashback.
 - place.locationId: the listed card where the scene is at the END of the reply. A place that is not listed goes to "new" (a few Russian words; parentId when it is inside a listed place) with locationId null. addTraits: permanent physical features shown for the first time (layout, furniture, smell) — not people, not weather. addNotes: temporary changes of the place (a broken window, lit candles); removeNotes: exact listed note text that is no longer true. Omit "place" when the place is unclear.
-- outfits: ONLY when clothing visibly changes or is described for the first time: the FULL current outfit in Russian, not the difference. Never for [LOCKED]. Someone off stage keeps their clothes. cardIds: of the listed "wardrobe cards on", the ones still worn after the change (omit when none are listed). lookId: a listed saved look they put on as a whole ("надел форму Тосвы"), else null.
+- outfits: ONLY when clothing visibly changes or is described for the first time: the FULL current outfit in Russian, not the difference. Never for [LOCKED]. Someone off stage keeps their clothes. cardIds: of the listed "wardrobe cards on" and of the pieces in the character's closet, the ones worn AFTER the change (omit when none are listed). lookId: a listed saved look (one from the character's closet when it has one) they put on as a whole ("надел форму Тосвы"), else null. A character with a closet changes into its looks and pieces when they fit the story AND the weather; only when nothing in it fits, describe the outfit in words and leave cardIds out.
+- weather and clothes: when an \"Outdoor weather\" line is listed, choose clothes from a closet (or describe a new outfit in words) that suit it and the place: warm layers, a coat, a hat and boots in frost or snow, light clothes in heat, something waterproof in rain; never a T-shirt in the cold or a coat in the heat unless the reply shows why. Clothes the reply itself describes are the truth: record them as they are, never correct them for the weather. Indoors, ordinary indoor clothes are fine.
 - conditions: temporary physical states shown on page (wet, bloodied, bruise on the cheek, messy hair, drunk); days = how many story days it plausibly lasts. conditionsGone: a listed condition the reply shows ending (washed, dried, healed).
 - features: LASTING looks that appear in the story or are revealed for the first time and stay — a scar, a tattoo, a piercing, dyed or cut hair, coloured lenses, a crooked nose after a break; kind: scar|tattoo|piercing|hair|eyes|body|other. Russian, where and what ("шрам через левую бровь"). Not clothes, not make-up, not a passing state (that is a condition), not what the character card already says unless it changed. When a listed condition leaves a lasting mark (the cut healed into a scar), add the feature and put the condition into conditionsGone. featuresChanged: a listed lasting look that changes or gets a new detail (the hair dyed again, we learn where the scar is from) — the FULL new text, the old detail kept when still true. Never for [LOCKED]. featuresGone: only when it is truly gone (a tattoo removed).
 - items: only story-relevant objects that appear, change hands, are hidden or moved — a weapon, a letter, a gift, keys, money in an envelope. Not furniture, not food or drink used at once, not a cigarette, a napkin, a cup or anything else used once and forgotten, not clothing. When in doubt, leave it out. ownerId: who has it now (null = lying somewhere, then "place" says where). importance: "key" plot-critical, "important" meaningful, "normal" otherwise. secret: true when its holder hides it from the others. Never for [LOCKED]. itemsGone: used up, destroyed or lost for good.
@@ -182,6 +196,8 @@ export function parseWorld(value) {
   const rawHeat = OBJECT(source.heat);
   const heatLevelNumber = Number(rawHeat?.level);
   const heat = rawHeat && Number.isFinite(heatLevelNumber) ? { level: Math.max(0, Math.min(100, Math.round(heatLevelNumber))), why: clip(rawHeat.why, 160) } : null;
+  const rawStage = OBJECT(source.intimacy);
+  const intimacy = rawStage && stageOf(rawStage.stage) ? { stage: rawStage.stage, why: clip(rawStage.why, 160) } : null;
   const rawWeather = OBJECT(source.weather);
   const tempC = rawWeather && rawWeather.tempC != null && rawWeather.tempC !== '' ? Math.round(Number(rawWeather.tempC)) : null;
   const weather = rawWeather && WEATHER_KIND_IDS.includes(rawWeather.kind)
@@ -203,7 +219,7 @@ export function parseWorld(value) {
   }
   const list = (key, max) => (Array.isArray(source[key]) ? source[key] : []).filter(OBJECT).slice(0, max);
   const outfits = list('outfits', WORLD_CHRONICLE_LIMITS.outfits)
-    .filter(item => ID(item.entityId) && (clip(item.outfit, WORLD_CHRONICLE_LIMITS.outfit) || ID(item.lookId)))
+    .filter(item => ID(item.entityId) && (clip(item.outfit, WORLD_CHRONICLE_LIMITS.outfit) || ID(item.lookId) || (Array.isArray(item.cardIds) && item.cardIds.some(ID))))
     .map(item => ({
       entityId: ID(item.entityId),
       outfit: clip(item.outfit, WORLD_CHRONICLE_LIMITS.outfit),
@@ -254,7 +270,7 @@ export function parseWorld(value) {
       .filter(item => ID(item.questId) && (item.status === 'done' || item.status === 'failed'))
       .map(item => ({ questId: ID(item.questId), status: item.status, note: clip(item.note, 300) })),
   };
-  return { clock, weather, heat, place, outfits, conditions, conditionsGone, features, featuresChanged, featuresGone, items, itemsGone, slips, quests };
+  return { clock, weather, heat, intimacy, place, outfits, conditions, conditionsGone, features, featuresChanged, featuresGone, items, itemsGone, slips, quests };
 }
 
 /**
@@ -341,6 +357,16 @@ export function materializeHeat(world, api) {
 }
 
 /**
+ * Where the intimate scene stands after the reply, as a proposal for the plaque (nothing is written here):
+ * [{ id, kind: 'stage', from, to, why }] or []. One step forward at most; see core/intimacy-stage.js.
+ */
+export function stageProposals(world, api) {
+  const state = api.state();
+  const hint = stageStepProposal(state.world?.intimacy, world?.intimacy, { flashback: Boolean(state.world?.clock?.flashback), intimate: state.world?.clock?.mode === 'intim' || Boolean(state.world?.intimacy) });
+  return hint ? [{ id: `stage:${hint.to}`, kind: 'stage', ...hint }] : [];
+}
+
+/**
  * What the reply shows about quests, as proposals for the plaque under it (nothing is written here):
  * { id, kind: 'new', name, text, steps } | { id, kind: 'step', questId, stepId, questName, stepText }
  * | { id, kind: 'end', questId, status, note, questName }. Unknown or closed quests, steps already done
@@ -402,8 +428,10 @@ export function materializeWorldRest(world, api, locationId) {
     // Wardrobe cards: a saved look put on whole, or the worn cards that stay on.
     const look = item.lookId && api.wardrobe ? api.wardrobe.looks.find(candidate => candidate.id === item.lookId) : null;
     const known = new Set((api.wardrobe?.cards ?? []).map(card => card.id));
-    const cardIds = look ? look.cardIds : (item.cardIds ?? []).filter(id => known.has(id) && (entry?.cardIds ?? []).includes(id));
-    const outfit = item.outfit || (look ? composeOutfit(api.wardrobe, look.cardIds) : '');
+    // Worn pieces may stay on; pieces of the character's closet may be put on.
+    const mine = new Set([...(entry?.cardIds ?? []), ...(api.wardrobe?.closets?.[entityId]?.cardIds ?? [])]);
+    const cardIds = look ? look.cardIds : (item.cardIds ?? []).filter(id => known.has(id) && mine.has(id));
+    const outfit = item.outfit || (look ? composeOutfit(api.wardrobe, look.cardIds) : cardIds.length ? composeOutfit(api.wardrobe, cardIds) : '');
     if (!outfit || (same(entry?.outfit ?? '', outfit) && !look)) continue;
     add('wardrobe.set', { entityId, outfit, ...(look || cardIds.length ? { cardIds } : {}) }, `${nameOf(entityId)} одет(а): ${look ? look.name : outfit}`);
   }

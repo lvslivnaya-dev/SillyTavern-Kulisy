@@ -174,10 +174,14 @@ export function removeCard(wardrobe, cardId) {
 
 /** Cards of a shelf, optionally of one gender and one section, sorted by section then name. */
 export function cardsOf(wardrobe, { shelf, gender, category } = {}) {
-  const order = new Map(WARDROBE_CATEGORIES.map(([id], index) => [id, index]));
-  return wardrobe.cards
-    .filter(card => (!shelf || card.shelf === shelf) && (!gender || card.gender === gender) && (!category || card.category === category))
-    .sort((left, right) => (order.get(left.category) - order.get(right.category)) || cardLabel(left).localeCompare(cardLabel(right), 'ru'));
+  return sortCards(wardrobe.cards.filter(card => (!shelf || card.shelf === shelf) && (!gender || card.gender === gender) && (!category || card.category === category)));
+}
+
+const CATEGORY_ORDER = new Map(WARDROBE_CATEGORIES.map(([id], index) => [id, index]));
+
+/** Section order first, then the name. */
+function sortCards(list) {
+  return list.sort((left, right) => (CATEGORY_ORDER.get(left.category) - CATEGORY_ORDER.get(right.category)) || cardLabel(left).localeCompare(cardLabel(right), 'ru'));
 }
 
 /** What to call a card: its name, else the start of its description, else its section. */
@@ -239,7 +243,8 @@ export function removeLook(wardrobe, lookId) {
 export function wornCards(wardrobe, cardIds) {
   const wanted = new Set((cardIds ?? []).map(String));
   if (!wanted.size) return [];
-  return cardsOf(wardrobe ?? emptyWardrobe()).filter(card => wanted.has(card.id));
+  // Pick the few worn cards first, then sort them: sorting the whole wardrobe (hundreds of cards) on every redraw was slow.
+  return sortCards((wardrobe ?? emptyWardrobe()).cards.filter(card => wanted.has(card.id)));
 }
 
 /** The outfit line of a set of cards: their names, in section order. They add up. */

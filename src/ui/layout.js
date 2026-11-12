@@ -17,12 +17,14 @@ export const NAV_GROUPS = Object.freeze([
   Object.freeze({ id: 'world', title: 'Мир', items: Object.freeze([
     ['places', 'Локации', 'pin'],
     ['items', 'Вещи', 'bag'],
+    ['cards', 'Карточки', 'card'],
     ['wardrobe', 'Гардероб', 'shirt'],
     ['calendar', 'Календарь', 'calendar'],
     ['weather', 'Погода', 'cloud'],
     ['quests', 'Квесты', 'flag'],
     ['dice', 'Кубик', 'dice'],
     ['names', 'Имена', 'tag'],
+    ['songs', 'Песни', 'music'],
   ]) }),
   Object.freeze({ id: 'relations', title: 'Отношения', items: Object.freeze([
     ['overview', 'Обзор пар', 'heart'],

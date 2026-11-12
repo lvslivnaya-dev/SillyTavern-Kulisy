@@ -21,8 +21,21 @@ const CYRILLIC = [
   ['н', 'n'], ['о', 'o'], ['п', 'p'], ['р', 'r'], ['с', 's'], ['т', 't'], ['у', 'u'], ['ф', 'f'],
 ];
 
+/** The skeleton of a word never changes, and the same few names are asked about again and again: remember them. */
+const KEY_CACHE = new Map();
+
 /** One word to its sound skeleton. */
 export function phoneticKey(word) {
+  const raw = String(word ?? '');
+  const known = KEY_CACHE.get(raw);
+  if (known !== undefined) return known;
+  const key = computePhoneticKey(raw);
+  if (KEY_CACHE.size > 20000) KEY_CACHE.clear();
+  KEY_CACHE.set(raw, key);
+  return key;
+}
+
+function computePhoneticKey(word) {
   // Composed first: NFKD would split «ё» and «й» into «е»/«и» + a mark and lose them.
   let text = String(word ?? '').normalize('NFC').toLowerCase().replace(/ō/g, 'o').replace(/ū/g, 'u');
   // Cyrillic → Latin, longest pieces first.

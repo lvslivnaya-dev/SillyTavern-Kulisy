@@ -27,6 +27,9 @@ export function createNamesPages(ctx) {
     catch (error) { setStatus(error?.message || String(error), true); return undefined; }
   }
 
+  /** The names of the library cards tied to an entry (one character in several AUs may have several). */
+  const cardsOf = entry => (snapshot().locationLibrary?.characters ?? []).filter(card => card.nameId === entry.id).map(card => card.name);
+
   const aliasesOf = text => String(text ?? '').split(/[,;\n]/).map(part => part.trim()).filter(Boolean);
   const hasForms = entry => entry.words.some(word => word.same || NAME_CASES.some(([key]) => word[key]));
 
@@ -120,6 +123,7 @@ export function createNamesPages(ctx) {
       send,
       element('strong', { text: entry.name }),
       entry.aliases.length ? element('span', { className: 'muted ku-small', text: ` (${entry.aliases.join(', ')})` }) : null,
+      ...(cardsOf(entry).length ? [element('span', { className: 'muted ku-small', title: cardsOf(entry).join(', '), text: ` · карточки: ${cardsOf(entry).length}` })] : []),
       element('span', { className: `ku-names-state${status === 'готово' ? ' ok' : ''}`, text: status }),
     ]));
     const name = element('input', { value: entry.name, 'aria-label': 'Как пишется' });

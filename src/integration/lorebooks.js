@@ -134,14 +134,14 @@ export function namesMatch(a, b) {
   return keysIntersect(canonKeys(a), canonKeys(b));
 }
 
-export function matchLoreEntries(book, entities, bookName) {
+export function matchLoreEntries(book, entities, bookName, skipEntry = null) {
   const aliases = new Set();
   for (const entity of Object.values(entities)) {
     for (const key of canonKeys(entity.name)) aliases.add(key);
     for (const alias of entity.aliases ?? []) for (const key of canonKeys(alias)) aliases.add(key);
   }
   // Secrets never reach the analyzer: it would write them down as common knowledge.
-  return Object.values(book?.entries ?? {}).filter(entry => !entry.disable && typeof entry.content === 'string' && !isSecretEntry(entry)).flatMap(entry => {
+  return Object.values(book?.entries ?? {}).filter(entry => !entry.disable && typeof entry.content === 'string' && !isSecretEntry(entry) && !skipEntry?.(entry)).flatMap(entry => {
     const keywords = new Set();
     for (const value of [...(Array.isArray(entry.key) ? entry.key : []), ...(Array.isArray(entry.keysecondary) ? entry.keysecondary : []), entry.comment ?? '']) {
       for (const key of canonKeys(value)) keywords.add(key);
@@ -161,14 +161,15 @@ function containsAnyForm(keyword, aliases) {
   return false;
 }
 
-export async function loadLinkedLore(context, state, maxCharacters = 14000) {
+/** `skipEntry(entry)`: entries the caller already has from elsewhere (the sheets of characters that have a library card). */
+export async function loadLinkedLore(context, state, maxCharacters = 14000, { skipEntry = null } = {}) {
   const names = state.ui?.linkedLorebooks ?? [];
   const sections = [];
   let remaining = maxCharacters;
   for (const name of names) {
     const book = await context.loadWorldInfo(name);
     if (!book?.entries) throw new Error(`Не удалось прочитать подключённый лорбук «${name}». Проверьте вкладку «Лорбуки».`);
-    for (const entry of matchLoreEntries(book, state.entities, name)) {
+    for (const entry of matchLoreEntries(book, state.entities, name, skipEntry)) {
       const text = JSON.stringify(entry);
       if (text.length > remaining) continue;
       sections.push(text);
@@ -269,7 +270,7 @@ function wordStartPattern(keys) {
  *   1 — an entry whose text names one of them.
  * Within a rank, the entry naming more of them comes first. Books that fail to load are skipped.
  */
-export async function loadGroupLore(context, state, ids, { books = [], maxCharacters = 14000, matchKeys } = {}) {
+export async function loadGroupLore(context, state, ids, { books = [], maxCharacters = 14000, matchKeys, skipEntry = null } = {}) {
   const people = ids.map(id => state.entities?.[id]).filter(Boolean);
   if (!people.length || !books.length) return '';
   // canonKeys returns a Set: spread it, flatMap would keep the Set itself.
@@ -282,7 +283,7 @@ export async function loadGroupLore(context, state, ids, { books = [], maxCharac
     catch (error) { console.warn(`[Kulisy] Lorebook «${name}» could not be read.`, error); continue; }
     for (const entry of Object.values(book?.entries ?? {})) {
       // A secret is not lore about anyone in public: headcanons and factors would spread it.
-      if (entry.disable || typeof entry.content !== 'string' || !entry.content.trim() || isSecretEntry(entry)) continue;
+      if (entry.disable || typeof entry.content !== 'string' || !entry.content.trim() || isSecretEntry(entry) || skipEntry?.(entry)) continue;
       const keys = new Set([...(Array.isArray(entry.key) ? entry.key : []), ...(Array.isArray(entry.keysecondary) ? entry.keysecondary : [])].flatMap(value => [...canonKeys(value)]));
       const isProfile = keyed.some(set => [...set].some(key => keys.has(key)));
       const text = `${entry.comment ?? ''}\n${entry.content}`;

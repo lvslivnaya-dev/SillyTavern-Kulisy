@@ -32,10 +32,11 @@
 
 import { cleanWeather } from './weather.js';
 import { nextHeat } from './heat.js';
+import { nextStage } from './intimacy-stage.js';
 import { QUEST_OPERATION_TYPES, applyQuestMutation, forgetQuestEntity, mergeQuestEntity, validateQuests } from './quests.js';
 
 export const WORLD_OPERATION_TYPES = Object.freeze([
-  'clock.set', 'weather.set', 'heat.set',
+  'clock.set', 'weather.set', 'heat.set', 'intimacy.set',
   'location.add', 'location.update', 'location.remove',
   'wardrobe.set', 'condition.add', 'condition.update', 'condition.remove',
   'item.add', 'item.update', 'item.remove',
@@ -261,6 +262,12 @@ export function applyWorldMutation(next, operation) {
       // { value } sets, { delta } shifts, { clear } removes; why = a few Russian words; lock = the chronicler leaves it alone.
       const heat = nextHeat(world.heat, payload, world.clock.day);
       if (heat) world.heat = heat; else delete world.heat;
+      break;
+    }
+    case 'intimacy.set': {
+      // { stage } sets, { delta: ±1 } steps, { lock } holds the ladder, { clear } ends the scene (core/intimacy-stage.js).
+      const intimacy = nextStage(world.intimacy, payload);
+      if (intimacy) world.intimacy = intimacy; else delete world.intimacy;
       break;
     }
     case 'location.add': {

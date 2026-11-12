@@ -4,7 +4,7 @@
  * journaled manual operation, so it shows in the history and survives swipes of
  * other replies; whatever the user writes by hand can be locked against the chronicler.
  */
-import { WEATHER_KINDS, WEATHER_KIND_IDS, cleanShifts, closingShifts, createOperation, dropOperation, parseTime, questId, questsOf, uniqueId } from '../core/index.js';
+import { WEATHER_KINDS, WEATHER_KIND_IDS, cleanShifts, stageOf, closingShifts, createOperation, dropOperation, parseTime, questId, questsOf, uniqueId } from '../core/index.js';
 
 function meta(reason) {
   return { transactionId: uniqueId('manual'), reason, timestamp: new Date().toISOString() };
@@ -77,6 +77,18 @@ export function createWorldCallbacks(deps) {
       if (why !== undefined) payload.why = why;
       if (!Object.keys(payload).length) return null;
       return run('heat.set', payload, `Накал: ${value != null ? value : `${Number(delta) > 0 ? '+' : ''}${delta ?? ''}`}${lock ? ' (держать)' : ''}`);
+    },
+    /** The stage of an intimate scene by hand: { stage } or { delta: ±1 }, { lock }, { clear } (the scene is over). */
+    onSetStage: ({ stage, delta, lock, clear, note }) => {
+      if (clear) return run('intimacy.set', { clear: true }, 'Стадия близости: сцена окончена');
+      const payload = {};
+      if (stage != null) payload.stage = String(stage);
+      else if (delta != null) payload.delta = Number(delta) < 0 ? -1 : 1;
+      if (lock !== undefined) payload.lock = Boolean(lock);
+      if (note !== undefined) payload.note = String(note);
+      if (!Object.keys(payload).length) return null;
+      const what = note !== undefined ? 'своя заметка' : stage != null ? `«${stageOf(stage)?.label ?? stage}»` : delta != null ? (payload.delta > 0 ? 'шаг вперёд' : 'шаг назад') : (lock ? 'держу' : 'отпускаю');
+      return run('intimacy.set', payload, `Стадия близости: ${what}`);
     },
     /** A place card of this chat, or free text (a matching card is picked up by name). */
     onSetSceneLocation: ({ locationId, location }) => {

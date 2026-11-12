@@ -8,6 +8,7 @@
  *   folders:   [{ id, name, parentId? }]                      folders may nest
  *   locations: [{ id, folderId, name, aliases[], description, traits[], parentId?, image?, autoName? }]
  *   items:     [{ id, folderId, name, aliases[], description, importance, ownerName?, image?, autoName? }]
+ *   characters:[{ id, folderId, name, aliases[], sections[], image? }]   cards, see character-cards.js
  *
  * `image` is a picture on the SillyTavern server (user/images/…), like a wardrobe card's;
  * `autoName`: the name came from the model, so describing the picture again may rename it.
@@ -27,16 +28,17 @@
 import { uniqueId } from './ids.js';
 import { ITEM_IMPORTANCE } from './world.js';
 import { cleanImagePath } from './wardrobe.js';
+import { normalizeSections, sectionsFromParts, templateSections } from './character-cards.js';
 
 export const LIBRARY_VERSION = 1;
 export const LIBRARY_LIMITS = Object.freeze({
-  folders: 300, locations: 2000, items: 3000, name: 120, alias: 60, aliases: 12, description: 8000, itemDescription: 2000, traits: 20, trait: 300,
+  folders: 300, locations: 2000, items: 3000, characters: 1500, name: 120, alias: 60, aliases: 12, description: 8000, itemDescription: 2000, traits: 20, trait: 300,
 });
 /** Where locations whose folder went missing (a broken import, a hand-edited file) are rescued to. */
 export const RESCUE_FOLDER_NAME = 'Восстановленные';
 
 export function emptyLibrary() {
-  return { version: LIBRARY_VERSION, folders: [], locations: [], items: [] };
+  return { version: LIBRARY_VERSION, folders: [], locations: [], items: [], characters: [] };
 }
 
 function clone(value) {
@@ -127,6 +129,7 @@ export function normalizeLibrary(input) {
       description: cleanProse(raw.description, LIBRARY_LIMITS.description),
       traits: cleanList(raw.traits, LIBRARY_LIMITS.traits, LIBRARY_LIMITS.trait),
       ...(raw.parentId ? { parentId: String(raw.parentId) } : {}),
+      ...(raw.lang === 'en' ? { lang: 'en' } : {}),
       ...picture(raw),
     });
   }
@@ -140,6 +143,14 @@ export function normalizeLibrary(input) {
     if (!id || !name || itemIds.has(id) || library.items.length >= LIBRARY_LIMITS.items) continue;
     itemIds.add(id);
     library.items.push(itemEntry(id, shelfOf(raw), name, raw));
+  }
+  const cardIds = new Set();
+  for (const raw of Array.isArray(input.characters) ? input.characters : []) {
+    const id = String(raw?.id ?? '');
+    const name = cleanText(raw?.name, LIBRARY_LIMITS.name);
+    if (!id || !name || cardIds.has(id) || library.characters.length >= LIBRARY_LIMITS.characters) continue;
+    cardIds.add(id);
+    library.characters.push(characterEntry(id, shelfOf(raw), name, raw));
   }
   return library;
 }
@@ -160,6 +171,47 @@ function applyPicture(entry, fields, oldName) {
   else if (fields.autoName === false || (fields.name != null && entry.name !== oldName)) delete entry.autoName;
 }
 
+/** A clean library character card from loose fields. */
+function characterEntry(id, folderId, name, raw) {
+  return {
+    id, folderId, name,
+    aliases: cleanList(raw?.aliases, LIBRARY_LIMITS.aliases, LIBRARY_LIMITS.alias),
+    sections: normalizeSections(raw?.sections),
+    ...(raw?.lang === 'en' ? { lang: 'en' } : {}),
+    ...(cleanText(raw?.nameId, 80) ? { nameId: cleanText(raw.nameId, 80) } : {}),
+    ...(cleanCloset(raw?.closet) ? { closet: cleanCloset(raw.closet) } : {}),
+    ...(cleanSource(raw?.source) ? { source: cleanSource(raw.source) } : {}),
+    ...picture(raw),
+  };
+}
+
+/** The closet of a card: wardrobe cards and saved looks tied to the character → { cardIds, lookIds }, or null when empty. */
+function cleanCloset(raw) {
+  const ids = (list, max) => [...new Set((Array.isArray(list) ? list : []).map(id => cleanText(id, 80)).filter(Boolean))].slice(0, max);
+  const cardIds = ids(raw?.cardIds, 120);
+  const lookIds = ids(raw?.lookIds, 40);
+  // «Personal» pieces: only this character may have them in their closet (a subset of its pieces).
+  const ownIds = ids(raw?.ownIds, 120).filter(id => cardIds.includes(id));
+  return cardIds.length || lookIds.length ? { cardIds, lookIds, ...(ownIds.length ? { ownIds } : {}) } : null;
+}
+
+/**
+ * Pieces of the wardrobe that belong to one character alone: wardrobe card id → the library card whose closet marks it as personal
+ * («только у него»). If two cards claim the same piece, the first one in the library keeps it.
+ */
+export function personalPieces(library) {
+  const owners = new Map();
+  for (const card of library?.characters ?? []) for (const id of card.closet?.ownIds ?? []) if (!owners.has(id)) owners.set(id, card.id);
+  return owners;
+}
+
+/** Where a card came from (a note of the Obsidian folder): { path, hash, stale? }, or null. */
+function cleanSource(raw) {
+  const path = cleanText(raw?.path, 400);
+  const hash = cleanText(raw?.hash, 40);
+  return path && hash ? { path, hash, ...(raw.stale ? { stale: true } : {}) } : null;
+}
+
 /** A clean library thing from loose fields. */
 function itemEntry(id, folderId, name, raw) {
   const ownerName = cleanText(raw?.ownerName, LIBRARY_LIMITS.name);
@@ -169,6 +221,7 @@ function itemEntry(id, folderId, name, raw) {
     description: cleanProse(raw?.description, LIBRARY_LIMITS.itemDescription),
     importance: ITEM_IMPORTANCE.includes(raw?.importance) ? raw.importance : 'normal',
     ...(ownerName ? { ownerName } : {}),
+    ...(raw?.lang === 'en' ? { lang: 'en' } : {}),
     ...picture(raw),
   };
 }
@@ -221,14 +274,16 @@ export function removeFolder(library, folderId, { withContents = false } = {}) {
   const ids = folderWithDescendants(library, folderId);
   const inside = library.locations.filter(location => ids.has(location.folderId));
   const things = (library.items ?? []).filter(item => ids.has(item.folderId));
-  if (!withContents && (inside.length || things.length || ids.size > 1)) throw new RangeError('Папка не пуста');
+  const people = (library.characters ?? []).filter(card => ids.has(card.folderId));
+  if (!withContents && (inside.length || things.length || people.length || ids.size > 1)) throw new RangeError('Папка не пуста');
   const removed = new Set(inside.map(location => location.id));
   const next = clone(library);
   next.folders = next.folders.filter(folder => !ids.has(folder.id));
   next.locations = next.locations.filter(location => !removed.has(location.id));
   next.items = (next.items ?? []).filter(item => !ids.has(item.folderId));
+  next.characters = (next.characters ?? []).filter(card => !ids.has(card.folderId));
   for (const location of next.locations) if (removed.has(location.parentId)) delete location.parentId;
-  return { library: next, removedLocationIds: [...removed], removedItemIds: things.map(item => item.id) };
+  return { library: next, removedLocationIds: [...removed], removedItemIds: things.map(item => item.id), removedCharacterIds: people.map(card => card.id) };
 }
 
 // ---- Locations ------------------------------------------------------------
@@ -243,6 +298,7 @@ function applyLocationFields(next, location, fields) {
   if (fields.aliases != null) location.aliases = cleanList(fields.aliases, LIBRARY_LIMITS.aliases, LIBRARY_LIMITS.alias);
   if (fields.description != null) location.description = cleanProse(fields.description, LIBRARY_LIMITS.description);
   if (fields.traits != null) location.traits = cleanList(fields.traits, LIBRARY_LIMITS.traits, LIBRARY_LIMITS.trait);
+  if (fields.lang !== undefined) { if (fields.lang === 'en') location.lang = 'en'; else delete location.lang; }
   if (fields.parentId !== undefined) {
     const parentId = String(fields.parentId ?? '');
     if (parentId && !next.locations.some(candidate => candidate.id === parentId)) throw new RangeError('Такой локации нет');
@@ -297,6 +353,7 @@ function applyItemFields(next, item, fields) {
   }
   if (fields.aliases != null) item.aliases = cleanList(fields.aliases, LIBRARY_LIMITS.aliases, LIBRARY_LIMITS.alias);
   if (fields.description != null) item.description = cleanProse(fields.description, LIBRARY_LIMITS.itemDescription);
+  if (fields.lang !== undefined) { if (fields.lang === 'en') item.lang = 'en'; else delete item.lang; }
   if (fields.importance != null) item.importance = ITEM_IMPORTANCE.includes(fields.importance) ? fields.importance : 'normal';
   if (fields.ownerName !== undefined) {
     const ownerName = cleanText(fields.ownerName, LIBRARY_LIMITS.name);
@@ -339,6 +396,157 @@ export function searchLibraryItems(library, query) {
     .some(text => text.toLocaleLowerCase('ru-RU').includes(wanted)));
 }
 
+// ---- Character cards ------------------------------------------------------------
+
+/** A card's name is free in its folder: the lorebook prompter must never have to guess between two cards of one name. Other folders may repeat it. */
+function assertNameFree(next, card) {
+  const clash = (next.characters ?? []).find(other => other.id !== card.id && other.folderId === card.folderId && sameName(other.name, card.name));
+  if (!clash) return;
+  const folder = next.folders.find(item => item.id === card.folderId);
+  throw new RangeError(`В папке «${folder?.name ?? '…'}» уже есть карточка «${clash.name}». В одной папке имена не повторяются, чтобы суфлёр не путался; в другой папке такое же имя можно.`);
+}
+
+function applyCharacterFields(next, card, fields) {
+  const oldName = card.name;
+  if (fields.name != null) card.name = requireName(fields.name);
+  if (fields.folderId != null) {
+    if (!next.folders.some(folder => folder.id === fields.folderId)) throw new RangeError('Сначала выберите папку');
+    card.folderId = fields.folderId;
+  }
+  if (fields.aliases != null) card.aliases = cleanList(fields.aliases, LIBRARY_LIMITS.aliases, LIBRARY_LIMITS.alias);
+  if (fields.sections != null) card.sections = normalizeSections(fields.sections);
+  if (fields.closet !== undefined) { const closet = cleanCloset(fields.closet); if (closet) card.closet = closet; else delete card.closet; }
+  if (fields.nameId !== undefined) { const nameId = cleanText(fields.nameId, 80); if (nameId) card.nameId = nameId; else delete card.nameId; }
+  if (fields.lang !== undefined) { if (fields.lang === 'en') card.lang = 'en'; else delete card.lang; }
+  if (fields.source !== undefined) { const source = cleanSource(fields.source); if (source) card.source = source; else delete card.source; }
+  applyPicture(card, fields, oldName);
+  assertNameFree(next, card);
+}
+
+/** Add a character card (the template's sections, empty, unless `sections` is given). It must sit in an existing folder. */
+export function addLibraryCharacter(library, fields = {}) {
+  const next = clone(library);
+  next.characters ??= [];
+  if (next.characters.length >= LIBRARY_LIMITS.characters) throw new RangeError('Слишком много карточек');
+  if (!fields.folderId) throw new RangeError('Сначала выберите папку');
+  const card = { id: uniqueId('card'), folderId: '', name: '', aliases: [], sections: fields.sections != null ? [] : templateSections() };
+  applyCharacterFields(next, card, { name: fields.name ?? '', ...fields });
+  next.characters.push(card);
+  return { library: next, character: card };
+}
+
+export function updateLibraryCharacter(library, cardId, changes = {}) {
+  const next = clone(library);
+  const card = (next.characters ?? []).find(candidate => candidate.id === cardId);
+  if (!card) throw new RangeError('Такой карточки нет');
+  applyCharacterFields(next, card, changes);
+  return next;
+}
+
+/** Move several cards into one folder. A card whose name is already taken there is left where it was and listed in `skipped`. */
+export function moveLibraryCharacters(library, cardIds, folderId) {
+  return moveLibraryEntries(library, 'characters', cardIds, folderId);
+}
+
+/** The same for places ('places'), things ('items') and cards ('characters'). */
+export function moveLibraryEntries(library, kind, ids, folderId) {
+  const shelf = kind === 'characters' ? 'characters' : kind === 'items' ? 'items' : 'locations';
+  const update = kind === 'characters' ? updateLibraryCharacter : kind === 'items' ? updateLibraryItem : updateLocation;
+  if (!library.folders.some(folder => folder.id === folderId)) throw new RangeError('Сначала выберите папку');
+  let next = library;
+  const moved = [];
+  const skipped = [];
+  for (const id of new Set(ids ?? [])) {
+    const card = (next[shelf] ?? []).find(candidate => candidate.id === id);
+    if (!card || card.folderId === folderId) continue;
+    try { next = update(next, id, { folderId }); moved.push(id); }
+    catch (error) { skipped.push({ id, name: card.name, why: error?.message ?? String(error) }); }
+  }
+  return { library: next, moved, skipped };
+}
+
+export function removeLibraryCharacter(library, cardId) {
+  const next = clone(library);
+  next.characters = (next.characters ?? []).filter(card => card.id !== cardId);
+  return next;
+}
+
+/** Copy a card next to the original (to make "the same, but in another story"). The copy has no picture of its own. */
+export function duplicateLibraryCharacter(library, cardId, { folderId } = {}) {
+  const source = (library.characters ?? []).find(candidate => candidate.id === cardId);
+  if (!source) throw new RangeError('Такой карточки нет');
+  const { id, image, autoName, source: _note, ...fields } = clone(source);
+  const sections = fields.sections.map(({ id: sectionId, ...rest }) => rest);
+  const target = folderId ?? source.folderId;
+  const taken = new Set((library.characters ?? []).filter(card => card.folderId === target).map(card => card.name.toLocaleLowerCase('ru-RU')));
+  let name = `${source.name} (копия)`.slice(0, LIBRARY_LIMITS.name);
+  for (let number = 2; taken.has(name.toLocaleLowerCase('ru-RU')) && number < 100; number += 1) name = `${source.name} (копия ${number})`.slice(0, LIBRARY_LIMITS.name);
+  return addLibraryCharacter(library, { ...fields, sections, name, folderId: target });
+}
+
+/** → a function: card → the draft read from its note (the same path; else the same file name when it is the only one — the picked folder may be a level higher or lower), or null. */
+export function noteFinder(drafts) {
+  const found = new Map();
+  const byFile = new Map();
+  const lower = value => String(value).toLocaleLowerCase('ru-RU');
+  for (const draft of drafts ?? []) {
+    if (!draft?.source) continue;
+    found.set(lower(draft.source.path), draft);
+    const base = lower(draft.source.path.split('/').pop());
+    byFile.set(base, byFile.has(base) ? null : draft);
+  }
+  return card => (card?.source ? found.get(lower(card.source.path)) ?? byFile.get(lower(card.source.path.split('/').pop())) ?? null : null);
+}
+
+/**
+ * Compare the cards that came from notes with the notes as they are now. `drafts` are the questionnaires read from the folder
+ * (character-import.js: each carries source = { path, hash }). A card whose note has another hash is marked stale; one whose
+ * note is gone is listed as missing; the others are cleared of the mark. → { library, changed: [id], same: n, missing: [id] }
+ */
+export function checkCardSources(library, drafts) {
+  const next = clone(library);
+  const noteOf = noteFinder(drafts);
+  const changed = [];
+  const missing = [];
+  let same = 0;
+  for (const card of next.characters ?? []) {
+    if (!card.source) continue;
+    const draft = noteOf(card);
+    if (!draft) { missing.push(card.id); continue; }
+    if (draft.source.hash === card.source.hash) { same += 1; delete card.source.stale; } else { card.source.stale = true; changed.push(card.id); }
+  }
+  return { library: next, changed, same, missing };
+}
+
+/**
+ * Load a card again from its note (Russian, as written): its sections are replaced by the note's; a section that keeps its title
+ * keeps its id and its own «when» / keys. The name and the picture stay, new aliases are added. The card is Russian again until translated.
+ */
+export function refreshLibraryCharacter(library, cardId, draft) {
+  const next = clone(library);
+  const card = (next.characters ?? []).find(candidate => candidate.id === cardId);
+  if (!card) throw new RangeError('Такой карточки нет');
+  if (!draft?.source) throw new RangeError('Для этой карточки нет заметки');
+  const old = new Map(card.sections.map(section => [section.title.toLocaleLowerCase('ru-RU'), section]));
+  card.sections = normalizeSections(sectionsFromParts(draft.sections).map(section => {
+    const had = old.get(section.title.toLocaleLowerCase('ru-RU'));
+    return had ? { ...section, id: had.id, ...(had.when ? { when: had.when } : {}), ...(had.keys ? { keys: had.keys } : {}) } : section;
+  }));
+  card.aliases = cleanList([...card.aliases, ...(draft.aliases ?? [])], LIBRARY_LIMITS.aliases, LIBRARY_LIMITS.alias)
+    .filter(alias => alias.toLocaleLowerCase('ru-RU') !== card.name.toLocaleLowerCase('ru-RU'));
+  card.source = { path: draft.source.path, hash: draft.source.hash };
+  delete card.lang;
+  return next;
+}
+
+/** Cards whose name, alias or text contains the query. */
+export function searchLibraryCharacters(library, query) {
+  const wanted = cleanText(query, 200).toLocaleLowerCase('ru-RU');
+  if (!wanted) return [];
+  return (library.characters ?? []).filter(card => [card.name, ...card.aliases, ...card.sections.flatMap(section => [section.text])]
+    .some(text => text.toLocaleLowerCase('ru-RU').includes(wanted)));
+}
+
 // ---- Queries ---------------------------------------------------------------
 
 /** What a gallery page shows: the folders, places and things directly inside `folderId` ('' = the top). */
@@ -348,6 +556,7 @@ export function folderContents(library, folderId = '') {
     folders: library.folders.filter(folder => (folder.parentId ?? '') === folderId).sort(byName),
     locations: folderId ? library.locations.filter(location => location.folderId === folderId).sort(byName) : [],
     items: folderId ? (library.items ?? []).filter(item => item.folderId === folderId).sort(byName) : [],
+    characters: folderId ? (library.characters ?? []).filter(card => card.folderId === folderId).sort(byName) : [],
   };
 }
 
@@ -388,7 +597,8 @@ export function exportLibrary(library, folderId = '') {
   const kept = new Set(locations.map(location => location.id));
   for (const location of locations) if (location.parentId && !kept.has(location.parentId)) delete location.parentId;
   const items = clone((library.items ?? []).filter(item => ids.has(item.folderId)));
-  return { kind: LIBRARY_EXPORT_KIND, version: LIBRARY_VERSION, folders, locations, items };
+  const characters = clone((library.characters ?? []).filter(card => ids.has(card.folderId)));
+  return { kind: LIBRARY_EXPORT_KIND, version: LIBRARY_VERSION, folders, locations, items, characters };
 }
 
 function sameName(left, right) {
@@ -476,6 +686,36 @@ export function addItemDrafts(library, drafts, targetFolderId = '') {
 }
 
 /**
+ * Character drafts — { folderPath, name, aliases, sections: [{ kind?, title, text }] } — the same way as
+ * addDrafts: a folder is required, a name already in its folder is skipped.
+ */
+export function addCharacterDrafts(library, drafts, targetFolderId = '') {
+  if (targetFolderId && !library.folders.some(folder => folder.id === targetFolderId)) throw new RangeError('Такой папки нет');
+  const next = clone(library);
+  next.characters ??= [];
+  const added = [];
+  const skipped = [];
+  for (const draft of Array.isArray(drafts) ? drafts : []) {
+    const name = cleanText(draft?.name, LIBRARY_LIMITS.name);
+    if (!name) continue;
+    let folderId = targetFolderId;
+    for (const step of Array.isArray(draft.folderPath) ? draft.folderPath : []) {
+      const stepName = cleanText(step, LIBRARY_LIMITS.name);
+      if (stepName) folderId = ensureFolder(next, stepName, folderId);
+    }
+    // A note already loaded stays one card, wherever the card was moved to in the library (the note's path is what ties them).
+    const notePath = String(draft?.source?.path ?? '').toLocaleLowerCase('ru-RU');
+    if (!folderId || next.characters.length >= LIBRARY_LIMITS.characters
+      || (notePath && next.characters.some(card => card.source && card.source.path.toLocaleLowerCase('ru-RU') === notePath))
+      || next.characters.some(card => card.folderId === folderId && sameName(card.name, name))) { skipped.push(name); continue; }
+    const card = characterEntry(uniqueId('card'), folderId, name, { ...draft, sections: sectionsFromParts(draft.sections) });
+    next.characters.push(card);
+    added.push(card.id);
+  }
+  return { library: next, added, skipped };
+}
+
+/**
  * Merge an exported file into the library under `targetFolderId` ('' = keep its top
  * folders at the top). Folders are matched by name at each level; places that already
  * exist by name in their folder are skipped. IDs from the file are never trusted.
@@ -491,7 +731,8 @@ export function importLibrary(library, data, targetFolderId = '') {
   }));
   const placed = addDrafts(library, drafts, targetFolderId);
   const things = addItemDrafts(placed.library, incoming.items.map(item => ({ ...item, folderPath: pathOf(item.folderId) })), targetFolderId);
-  const result = { library: things.library, added: [...placed.added, ...things.added], skipped: [...placed.skipped, ...things.skipped] };
+  const people = addCharacterDrafts(things.library, incoming.characters.map(card => ({ ...card, folderPath: pathOf(card.folderId) })), targetFolderId);
+  const result = { library: people.library, added: [...placed.added, ...things.added, ...people.added], skipped: [...placed.skipped, ...things.skipped, ...people.skipped] };
   // Empty folders of the file are kept too: someone shared a structure to fill.
   for (const folder of incoming.folders) {
     let parentId = targetFolderId;
